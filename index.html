@@ -79,12 +79,12 @@ code{font-family:var(--f-data);font-size:.92em}
 </header>
 
 <section>
-  <h2>现在（10-09 00:16 起，strata-141-d14ca361 + E387 解码配置）</h2>
+  <h2>现在（strata-141-d14ca361 + E387 解码配置）</h2>
   <div class="now">
-    <div><b>960–980</b><small>4K prompt tok/s</small></div>
-    <div><b>1,710</b><small>32K prompt tok/s</small></div>
-    <div><b>1,950</b><small>128K prompt tok/s</small></div>
-    <div><b>73–83</b><small>解码 tok/s（4K 73–77 / 32K 80–83；spec 3/0.7 + 两窗流水线，10-09 起；之前 66–75）</small></div>
+    <div><b>968</b><small>4K prompt tok/s（E388）</small></div>
+    <div><b>1,714</b><small>32K prompt tok/s（E388）</small></div>
+    <div><b>2,041</b><small>128K prompt tok/s（E388，无图片编码器；带编码器 ≈1,950）</small></div>
+    <div><b>77 / 82 / 76</b><small>解码 tok/s，4K / 32K / 128K（E388；真实会话 93K 长生成 97）；之前 66–75</small></div>
   </div>
   <p class="foot">生产 = Strata 上游 0.1.41 + 7 个本地补丁（PR #1149 / #1151 / #1167 + rocBLAS 解的本机缓存）+ 自改的 llama.cpp ggml（MMQ 的 q8_0 / iq3_s dot 链头用 VOP3P 编码）。</p>
 </section>
@@ -92,12 +92,13 @@ code{font-family:var(--f-data);font-size:.92em}
 <section>
   <h2>速度怎么一步步上来的</h2>
   <div class="legend">
+    <span><i class="dot" style="background:var(--l-stable)"></i>读 prompt，4K（tok/s，左轴）</span>
     <span><i class="dot" style="background:var(--l-prompt)"></i>读 prompt，32K–37K（tok/s，左轴）</span>
     <span><i class="dot" style="background:var(--l-engine)"></i>读 prompt，128K（tok/s，左轴）</span>
     <span><i class="dot" style="background:var(--l-decode)"></i>解码（tok/s，右轴）</span>
   </div>
   <div class="panel"><div class="chart" id="speed"></div>
-  <p class="foot">各点来自不同实验，条件不完全相同：llama.cpp 和 132a522 是 37K（E215）；0.1.39 和 238abe8 来自 10-05 社区报告，当时自适应关着；61c59fa 只测了 128K（E300）；341922e 来自 E342；10-07 起的点来自 E362 / E380 / E382 / E383 的 P 臂（生产配置、图片编码器在 HIP0）。空心点表示那一步没测这个指标。</p></div>
+  <p class="foot">各点来自不同实验，条件不完全相同：4K 线的前两点是 5K prompt（E215），238abe8 / 341922e 的 4K 来自两份社区报告的 split 臂；最后一点的 prompt 三档取 E383/E387 的生产臂（解码配置不改 prompt，E388 ±0.7%）；llama.cpp 和 132a522 是 37K（E215）；0.1.39 和 238abe8 来自 10-05 社区报告，当时自适应关着；61c59fa 只测了 128K（E300）；341922e 来自 E342；10-07 起的点来自 E362 / E380 / E382 / E383 的 P 臂（生产配置、图片编码器在 HIP0）。空心点表示那一步没测这个指标。</p></div>
 </section>
 
 <section>
@@ -126,16 +127,16 @@ function el(t,a,txt){const e=document.createElementNS(NS,t);for(const k in a)e.s
 
 // milestones on the chart (production states)
 const M=[
-  {k:'llama.cpp\n10-02',p32:274,p128:null,d:23.7},
-  {k:'Strata 0.1.38\n10-04',p32:722,p128:null,d:54.8},
-  {k:'0.1.39\n10-04',p32:723,p128:821,d:60.6},
-  {k:'238abe8\n10-05',p32:1616,p128:1823,d:59.0},
-  {k:'61c59fa\n10-05',p32:null,p128:1940,d:null},
-  {k:'341922e\n10-06',p32:1685,p128:2003,d:74.7},
-  {k:'vision→HIP0\n10-07',p32:1652,p128:1874,d:74.0},
-  {k:'q8k ggml\n10-08',p32:1711,p128:1957,d:74.3},
-  {k:'0.1.41\n10-08',p32:1710,p128:1950,d:74.2},
-  {k:'spec3/0.7+win2\n10-09',p32:1710,p128:null,d:82.2},
+  {k:'llama.cpp\n10-02',p4:274,p32:274,p128:null,d:23.7},
+  {k:'Strata 0.1.38\n10-04',p4:430,p32:722,p128:null,d:54.8},
+  {k:'0.1.39\n10-04',p4:null,p32:723,p128:821,d:60.6},
+  {k:'238abe8\n10-05',p4:853,p32:1616,p128:1823,d:59.0},
+  {k:'61c59fa\n10-05',p4:null,p32:null,p128:1940,d:null},
+  {k:'341922e\n10-06',p4:968,p32:1685,p128:2003,d:74.7},
+  {k:'vision→HIP0\n10-07',p4:null,p32:1652,p128:1874,d:74.0},
+  {k:'q8k ggml\n10-08',p4:975,p32:1711,p128:1957,d:74.3},
+  {k:'0.1.41\n10-08',p4:961,p32:1710,p128:1950,d:74.2},
+  {k:'spec3/0.7+win2\n10-09',p4:961,p32:1710,p128:1950,d:82.2},
 ];
 (function(){
   const W=860,H=372,L=56,R=60,T=16,B=84;
@@ -145,7 +146,7 @@ const M=[
   [0,500,1000,1500,2000].forEach(v=>{svg.append(el('line',{x1:L,x2:W-R,y1:yl(v),y2:yl(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-8,y:yl(v)+4,'text-anchor':'end'},v.toLocaleString('en-US')));});
   [0,20,40,60,80].forEach(v=>svg.append(el('text',{x:W-R+8,y:yr(v)+4},String(v))));
   M.forEach((m,i)=>{m.k.split('\n').forEach((s,j)=>svg.append(el('text',{x:xs(i),y:H-B+18+j*14+(i%2)*32,'text-anchor':'middle'},s)));});
-  const series=[['p32','var(--l-prompt)',yl],['p128','var(--l-engine)',yl],['d','var(--l-decode)',yr]];
+  const series=[['p4','var(--l-stable)',yl],['p32','var(--l-prompt)',yl],['p128','var(--l-engine)',yl],['d','var(--l-decode)',yr]];
   series.forEach(([key,col,y])=>{
     let last=null;
     M.forEach((m,i)=>{const v=m[key]; if(v==null) return;
