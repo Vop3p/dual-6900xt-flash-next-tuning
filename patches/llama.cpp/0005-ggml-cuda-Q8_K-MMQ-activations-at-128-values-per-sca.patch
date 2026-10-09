@@ -1,0 +1,69 @@
+From d6f8aedd4006f87717c73403e54c8fde90eaa5a3 Mon Sep 17 00:00:00 2001
+From: xjc10 <69450118+xjc10@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 15:24:06 -0400
+Subject: [PATCH 5/6] ggml-cuda: Q8_K MMQ activations at 128 values per scale;
+ q6_K dot chains start as VOP3P on RDNA2
+
+GGML_CUDA_MMQ_Q8K_BLOCK (default 128): 256 values per activation scale cost KLD
+0.003941 -> 0.004917 on Qwen3.8-27B UD-Q5_K_XL; 128 gives 0.003736 at the same
+kernel speed (E376 v3).
+
+ggml_cuda_dp4a_z: on RDNA2 a dot chain whose accumulator is a compile-time 0
+starts with the VOP3P v_dot4_i32_i8 (literal src2) instead of v_mov_b32 0 +
+v_dot4c. Only the q6_K Q8_K impl uses it: q6_K MMQ 27.6 -> 28.9 TFLOPS; the
+same asm in the q4_K/q5_K impls schedules 10% worse (E378 b..b7).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ ggml/src/ggml-cuda/common.cuh  | 13 +++++++++++++
+ ggml/src/ggml-cuda/vecdotq.cuh |  9 +++++----
+ 2 files changed, 18 insertions(+), 4 deletions(-)
+
+diff --git a/ggml/src/ggml-cuda/common.cuh b/ggml/src/ggml-cuda/common.cuh
+index 50713c012..cddc60718 100644
+--- a/ggml/src/ggml-cuda/common.cuh
++++ b/ggml/src/ggml-cuda/common.cuh
+@@ -748,6 +748,19 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
+ #endif // defined(GGML_USE_HIP)
+ }
+ 
++// ggml_cuda_dp4a whose chain head (a compile-time c == 0) is the VOP3P encoding with a literal src2 on RDNA2, saving
++// the v_mov_b32 0 the compiler emits for v_dot4c's accumulator. The inline asm hides the latency from the scheduler,
++// so it is used only where measured faster (E378: q6_K MMQ +4.6%; q4_K/q5_K -10%, those stay on ggml_cuda_dp4a).
++static __device__ __forceinline__ int ggml_cuda_dp4a_z(const int a, const int b, int c) {
++#if defined(GGML_USE_HIP) && defined(RDNA2)
++    if (__builtin_constant_p(c) && c == 0) {
++        asm("v_dot4_i32_i8 %0, %1, %2, 0" : "=v"(c) : "v"(a), "v"(b));
++        return c;
++    }
++#endif // defined(GGML_USE_HIP) && defined(RDNA2)
++    return ggml_cuda_dp4a(a, b, c);
++}
++
+ static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const float v, const float u) {
+     acc += v*u;
+ }
+diff --git a/ggml/src/ggml-cuda/vecdotq.cuh b/ggml/src/ggml-cuda/vecdotq.cuh
+index b6ba5d991..2feb2cf22 100644
+--- a/ggml/src/ggml-cuda/vecdotq.cuh
++++ b/ggml/src/ggml-cuda/vecdotq.cuh
+@@ -750,11 +750,12 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_K_impl_mmq(
+ 
+ #pragma unroll
+         for (int i = i0; i < i0 + 2; ++i) {
+-            sumi_d.x = ggml_cuda_dp4a(v[2*i+0], u[2*i+0], sumi_d.x); // SIMD dot product
+-            sumi_d.x = ggml_cuda_dp4a(v[2*i+1], u[2*i+1], sumi_d.x); // SIMD dot product
++            // dp4a_z: the chain heads as VOP3P dot products (E378: this exact form schedules 10% better than a ternary)
++            sumi_d.x = ggml_cuda_dp4a_z(v[2*i+0], u[2*i+0], sumi_d.x); // SIMD dot product
++            sumi_d.x = ggml_cuda_dp4a_z(v[2*i+1], u[2*i+1], sumi_d.x); // SIMD dot product
+ 
+-            sumi_d.y = ggml_cuda_dp4a(v[2*i+4], u[2*i+4], sumi_d.y); // SIMD dot product
+-            sumi_d.y = ggml_cuda_dp4a(v[2*i+5], u[2*i+5], sumi_d.y); // SIMD dot product
++            sumi_d.y = ggml_cuda_dp4a_z(v[2*i+4], u[2*i+4], sumi_d.y); // SIMD dot product
++            sumi_d.y = ggml_cuda_dp4a_z(v[2*i+5], u[2*i+5], sumi_d.y); // SIMD dot product
+         }
+ 
+         sumi = ggml_cuda_mad_scale(sc_reg[i0/2+0], sumi_d.x, sumi);
+-- 
+2.53.0
+

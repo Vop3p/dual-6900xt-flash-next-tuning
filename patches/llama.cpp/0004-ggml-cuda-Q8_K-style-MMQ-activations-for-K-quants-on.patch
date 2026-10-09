@@ -1,0 +1,529 @@
+From aa146da57e5149d5452bf490d6a1ac9f8454b442 Mon Sep 17 00:00:00 2001
+From: xjc10 <69450118+xjc10@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 14:39:42 -0400
+Subject: [PATCH 4/6] ggml-cuda: Q8_K style MMQ activations for K-quants on the
+ dp4a path (opt-in GGML_CUDA_MMQ_Q8K)
+
+New activation layout MMQ_Q8_1_DS_LAYOUT_DK for Q4_K/Q5_K/Q6_K: 1 fp32 scale per
+128 values (GGML_CUDA_MMQ_Q8K_BLOCK) + int16 sums of the quantized values per 32
+values. The sub-block scales and mins are applied as 24-bit integer multiplies
+over the 64 values of one impl call, then 1 float conversion.
+
+E376 on gfx1030: test-backend-ops MUL_MAT 1304/1304; q5_K 25.9 -> 28.2 TFLOPS,
+q6_K 25.3 -> 27.6, q4_K 25.9 -> 27.8; Qwen3.8-27B UD-Q5_K_XL prefill +3.5-4.5%;
+KLD 0.003941 -> 0.003736 (256 values per scale: 0.004917, rejected).
+
+WIP: dp4a path only, the mma paths do not read this layout.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ ggml/CMakeLists.txt                |   1 +
+ ggml/src/ggml-cuda/CMakeLists.txt  |   4 +
+ ggml/src/ggml-cuda/mmq-vec-dot.cuh | 123 +++++++++++++++++++++++++++++
+ ggml/src/ggml-cuda/mmq.cuh         |  41 ++++++++++
+ ggml/src/ggml-cuda/quantize.cu     | 118 +++++++++++++++++++++++++++
+ ggml/src/ggml-cuda/vecdotq.cuh     |  76 ++++++++++++++++++
+ ggml/src/ggml-hip/CMakeLists.txt   |   4 +
+ 7 files changed, 367 insertions(+)
+
+diff --git a/ggml/CMakeLists.txt b/ggml/CMakeLists.txt
+index 4af7fc881..8187a303a 100644
+--- a/ggml/CMakeLists.txt
++++ b/ggml/CMakeLists.txt
+@@ -200,6 +200,7 @@ option(GGML_CUDA                            "ggml: use CUDA"
+ set   (GGML_CUDA_CCCL_VERSION "" CACHE STRING "ggml: CCCL git tag to fetch, empty to use the version bundled with the installed CUDA Toolkit")
+ option(GGML_MUSA                            "ggml: use MUSA"                                  OFF)
+ option(GGML_CUDA_FORCE_MMQ                  "ggml: use mmq kernels instead of cuBLAS"         OFF)
++option(GGML_CUDA_MMQ_Q8K                    "ggml: Q8_K style MMQ activations for K-quants (dp4a HIP only)" OFF)
+ option(GGML_CUDA_FORCE_CUBLAS               "ggml: always use cuBLAS instead of mmq kernels"  OFF)
+ option(GGML_CUDA_NO_PEER_COPY               "ggml: do not use peer to peer copies"            OFF)
+ option(GGML_CUDA_NO_VMM                     "ggml: do not try to use CUDA VMM"                OFF)
+diff --git a/ggml/src/ggml-cuda/CMakeLists.txt b/ggml/src/ggml-cuda/CMakeLists.txt
+index 297d9ffc9..0d0cc6b08 100644
+--- a/ggml/src/ggml-cuda/CMakeLists.txt
++++ b/ggml/src/ggml-cuda/CMakeLists.txt
+@@ -140,6 +140,10 @@ if (CUDAToolkit_FOUND)
+         add_compile_definitions(GGML_CUDA_FORCE_MMQ)
+     endif()
+ 
++    if (GGML_CUDA_MMQ_Q8K)
++        add_compile_definitions(GGML_CUDA_MMQ_Q8K)
++    endif()
++
+     if (GGML_CUDA_FORCE_CUBLAS)
+         add_compile_definitions(GGML_CUDA_FORCE_CUBLAS)
+     endif()
+diff --git a/ggml/src/ggml-cuda/mmq-vec-dot.cuh b/ggml/src/ggml-cuda/mmq-vec-dot.cuh
+index 4ca6542d8..921dbd9f2 100644
+--- a/ggml/src/ggml-cuda/mmq-vec-dot.cuh
++++ b/ggml/src/ggml-cuda/mmq-vec-dot.cuh
+@@ -1007,6 +1007,129 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
+     }
+ }
+ 
++// GGML_CUDA_MMQ_Q8K: y in MMQ_Q8_1_DS_LAYOUT_DK (y[j][0] = scale of the 256 value block, y[j][1..2] = 4 int16 sums).
++// Same loop order as the q8_1 versions (k01 outermost, not unrolled: unrolling it spills ~170 VGPRs at J=128).
++// The sub-block scales are applied as integers over the 64 values of one impl call, then 1 float conversion.
++template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_K_dp4a(
++        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
++    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
++    constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
++    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback);
++
++    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q4_K, I);
++    const int   * x_qs = (const int   *) x;
++    const half2 * x_dm = (const half2 *) x_qs + txs.qs;
++    const int   * x_sc = (const int   *) x_dm + txs.dm;
++    const int   * y_qs = (const int   *) y + 4;
++
++// #pragma unroll
++    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR4_K*VDR_Q4_K_Q8_1_MMQ) {
++        const int k0 = k00 + k01;
++
++#pragma unroll
++        for (int j0 = 0; j0 < J; j0 += nwarps) {
++            const int j = j0 + threadIdx.y;
++
++            const float     d8 = __int_as_float(y[j*MMQ_TILE_Y_K]);
++            const int16_t * bs = (const int16_t *) (y + j*MMQ_TILE_Y_K + 1) + k01/8;
++
++#pragma unroll
++            for (int i0 = 0; i0 < I; i0 += warp_size) {
++                const int i = i0 + threadIdx.x;
++
++                const uint8_t * sc = (const uint8_t *) &x_sc[i * (MMQ_TILE_NE_K/8) + i/8 + k0/32] + 2*(k01/16);
++
++                int sumi = 0;
++                int summ = 0;
++                vec_dot_q4_K_q8_K_impl_mmq(
++                    &x_qs[i*(MMQ_TILE_NE_K + 1) + k0/2], &y_qs[j*MMQ_TILE_Y_K + k01], sc, sc+8, bs, sumi, summ);
++
++                const float2 dm = __half22float2(x_dm[i]);
++                sum[j0/nwarps*I/warp_size + i0/warp_size] += d8 * (dm.x*sumi - dm.y*summ);
++            }
++        }
++    }
++}
++
++template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q5_K_q8_K_dp4a(
++        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
++    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
++    constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
++    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback);
++
++    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q5_K, I);
++    const int   * x_qs = (const int   *) x;
++    const half2 * x_dm = (const half2 *) x_qs + txs.qs;
++    const int   * x_sc = (const int   *) x_dm + txs.dm;
++    const int   * y_qs = (const int   *) y + 4;
++
++// #pragma unroll
++    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR5_K*VDR_Q5_K_Q8_1_MMQ) {
++        const int k0 = k00 + k01;
++
++#pragma unroll
++        for (int j0 = 0; j0 < J; j0 += nwarps) {
++            const int j = j0 + threadIdx.y;
++
++            const float     d8 = __int_as_float(y[j*MMQ_TILE_Y_K]);
++            const int16_t * bs = (const int16_t *) (y + j*MMQ_TILE_Y_K + 1) + k01/8;
++
++#pragma unroll
++            for (int i0 = 0; i0 < I; i0 += warp_size) {
++                const int i = i0 + threadIdx.x;
++
++                const uint8_t * sc = ((const uint8_t *) &x_sc[i * (MMQ_TILE_NE_K/8) + i/8 + k00/32]) + 2*(k01/16);
++
++                int sumi = 0;
++                int summ = 0;
++                vec_dot_q5_K_q8_K_impl_mmq(
++                    &x_qs[i*(QR5_K*MMQ_TILE_NE_K + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k01], sc, sc+8, bs, sumi, summ);
++
++                const float2 dm = __half22float2(x_dm[i]);
++                sum[j0/nwarps*I/warp_size + i0/warp_size] += d8 * (dm.x*sumi - dm.y*summ);
++            }
++        }
++    }
++}
++
++template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q6_K_q8_K_dp4a(
++        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
++    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
++    constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
++    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback);
++
++    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q6_K, I);
++    const int   * x_qs = (const int   *) x;
++    const float * x_df = (const float *) x_qs + txs.qs;
++    const int   * x_sc = (const int   *) x_df + txs.dm;
++    const int   * y_qs = (const int   *) y + 4;
++
++// #pragma unroll
++    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR6_K*VDR_Q6_K_Q8_1_MMQ) {
++        const int k0 = k00 + k01;
++
++#pragma unroll
++        for (int j0 = 0; j0 < J; j0 += nwarps) {
++            const int j = j0 + threadIdx.y;
++
++            const float d8 = __int_as_float(y[j*MMQ_TILE_Y_K]);
++
++#pragma unroll
++            for (int i0 = 0; i0 < I; i0 += warp_size) {
++                const int i = i0 + threadIdx.x;
++
++                const int8_t * sc = ((const int8_t *) &x_sc[i * (MMQ_TILE_NE_K/8) + i/8 + k0/16]);
++
++                int sumi = 0;
++                vec_dot_q6_K_q8_K_impl_mmq(
++                    &x_qs[i*(QR6_K*MMQ_TILE_NE_K + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k01], sc, sumi);
++
++                sum[j0/nwarps*I/warp_size + i0/warp_size] += d8 * x_df[i*(MMQ_TILE_NE_K/QI6_K) + i/QI6_K] * sumi;
++            }
++        }
++    }
++}
++
+ template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q6_K_q8_1_mma(
+         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
+ #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+diff --git a/ggml/src/ggml-cuda/mmq.cuh b/ggml/src/ggml-cuda/mmq.cuh
+index 0cd31d916..7127a33f8 100644
+--- a/ggml/src/ggml-cuda/mmq.cuh
++++ b/ggml/src/ggml-cuda/mmq.cuh
+@@ -19,9 +19,16 @@ enum mmq_q8_1_ds_layout {
+     MMQ_Q8_1_DS_LAYOUT_D4,
+     MMQ_Q8_1_DS_LAYOUT_DS4,
+     MMQ_Q8_1_DS_LAYOUT_D2S6,
++    MMQ_Q8_1_DS_LAYOUT_DK, // 1 scale per 256 values + sums of the quantized values per 32 values (GGML_CUDA_MMQ_Q8K)
+ };
+ 
+ static constexpr int QK8_1_MMQ  = 4*QK8_1;
++
++// GGML_CUDA_MMQ_Q8K: values per activation scale in MMQ_Q8_1_DS_LAYOUT_DK, 128 or 256 (E376: 256 costs KLD +25%).
++#ifndef GGML_CUDA_MMQ_Q8K_BLOCK
++#define GGML_CUDA_MMQ_Q8K_BLOCK 128
++#endif // GGML_CUDA_MMQ_Q8K_BLOCK
++static_assert(GGML_CUDA_MMQ_Q8K_BLOCK == 128 || GGML_CUDA_MMQ_Q8K_BLOCK == 256, "bad GGML_CUDA_MMQ_Q8K_BLOCK");
+ static constexpr int QK_FP4_MMQ = 2*QK8_1_MMQ;
+ 
+ struct block_q8_1_mmq {
+@@ -41,6 +48,10 @@ struct block_q8_1_mmq {
+         half2 ds4[4];   // 1 16 bit scale + 1 16 bit partial sum per 32 values, stored as d0,s0,d1,s1,d2,s2,d3,s3
+         half  d2s6[8];  // 1 16 bit scale per 64 values + 1 16 bit partial sum per 16 values for the first 96 values,
+                         //     stored as d0,d1,s1,s2,s3,s4,s5
++        struct {
++            float   d;      // 1 32 bit scale per GGML_CUDA_MMQ_Q8K_BLOCK values (256: stored in both 128 value blocks)
++            int16_t bs[4];  // sums of the quantized values per 32 values
++        } dk;
+     };
+     int8_t qs[QK8_1_MMQ];
+ };
+@@ -81,8 +92,17 @@ static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
+             return MMQ_Q8_1_DS_LAYOUT_D4;
+         case GGML_TYPE_Q4_K:
+         case GGML_TYPE_Q5_K:
++#ifdef GGML_CUDA_MMQ_Q8K
++            return MMQ_Q8_1_DS_LAYOUT_DK;
++#else
+             return MMQ_Q8_1_DS_LAYOUT_DS4;
++#endif // GGML_CUDA_MMQ_Q8K
+         case GGML_TYPE_Q6_K:
++#ifdef GGML_CUDA_MMQ_Q8K
++            return MMQ_Q8_1_DS_LAYOUT_DK;
++#else
++            return MMQ_Q8_1_DS_LAYOUT_D4;
++#endif // GGML_CUDA_MMQ_Q8K
+         case GGML_TYPE_IQ2_XXS:
+         case GGML_TYPE_IQ2_XS:
+         case GGML_TYPE_IQ2_S:
+@@ -600,6 +620,26 @@ static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_func
+                     ggml_cuda_mmq_load_tiles_q3_K<type, J, fallback>,
+                     ggml_cuda_mmq_vec_dot_q3_K_q8_1_dp4a<type, J, fallback>,
+                     ggml_cuda_mmq_write_back_dp4a<type, J, fallback>);
++#ifdef GGML_CUDA_MMQ_Q8K
++            case GGML_TYPE_Q4_K:
++                return ggml_cuda_mmq_util_funcs(
++                    VDR_Q4_K_Q8_1_MMQ,
++                    ggml_cuda_mmq_load_tiles_q4_K<type, J, fallback>,
++                    ggml_cuda_mmq_vec_dot_q4_K_q8_K_dp4a<type, J, fallback>,
++                    ggml_cuda_mmq_write_back_dp4a<type, J, fallback>);
++            case GGML_TYPE_Q5_K:
++                return ggml_cuda_mmq_util_funcs(
++                    VDR_Q5_K_Q8_1_MMQ,
++                    ggml_cuda_mmq_load_tiles_q5_K<type, J, fallback>,
++                    ggml_cuda_mmq_vec_dot_q5_K_q8_K_dp4a<type, J, fallback>,
++                    ggml_cuda_mmq_write_back_dp4a<type, J, fallback>);
++            case GGML_TYPE_Q6_K:
++                return ggml_cuda_mmq_util_funcs(
++                    VDR_Q6_K_Q8_1_MMQ,
++                    ggml_cuda_mmq_load_tiles_q6_K<type, J, fallback>,
++                    ggml_cuda_mmq_vec_dot_q6_K_q8_K_dp4a<type, J, fallback>,
++                    ggml_cuda_mmq_write_back_dp4a<type, J, fallback>);
++#else
+             case GGML_TYPE_Q4_K:
+                 return ggml_cuda_mmq_util_funcs(
+                     VDR_Q4_K_Q8_1_MMQ,
+@@ -618,6 +658,7 @@ static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_func
+                     ggml_cuda_mmq_load_tiles_q6_K<type, J, fallback>,
+                     ggml_cuda_mmq_vec_dot_q6_K_q8_1_dp4a<type, J, fallback>,
+                     ggml_cuda_mmq_write_back_dp4a<type, J, fallback>);
++#endif // GGML_CUDA_MMQ_Q8K
+ // ---------------------------------------------------------------------------------------------
+             case GGML_TYPE_IQ1_S:
+                 return ggml_cuda_mmq_util_funcs(
+diff --git a/ggml/src/ggml-cuda/quantize.cu b/ggml/src/ggml-cuda/quantize.cu
+index bcc772395..c5097d87d 100644
+--- a/ggml/src/ggml-cuda/quantize.cu
++++ b/ggml/src/ggml-cuda/quantize.cu
+@@ -555,6 +555,108 @@ static __global__ void quantize_mmq_q8_1(
+     GGML_UNUSED(n_expert_used);
+ }
+ 
++// GGML_CUDA_MMQ_Q8K: MMQ_Q8_1_DS_LAYOUT_DK, 1 scale per GGML_CUDA_MMQ_Q8K_BLOCK values + the sums of the quantized
++// values per 32 values. 8 values per thread; with 256 values per scale it is written to both 128 value blocks.
++template <bool scatter>
++static __global__ void quantize_mmq_q8_K(
++        const float * __restrict__ x, const int32_t * __restrict__ ids, void * __restrict__ vy,
++        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
++        const int64_t ne0, const int ne1, const int ne2, const int n_expert_used) {
++
++    constexpr int vals_per_thread = 8;
++
++    const int64_t i0 = ((int64_t)blockDim.x*blockIdx.y + threadIdx.x)*vals_per_thread;
++
++    if (i0 >= ne0) {
++        return;
++    }
++
++    ggml_cuda_pdl_sync();
++
++    int64_t base_idx;
++    if constexpr (scatter) {
++        base_idx = (int64_t) blockIdx.x * s02; // one physical row per token
++    } else {
++        const int64_t i2  = blockIdx.z % ne2;
++        const int64_t i3  = blockIdx.z / ne2;
++        const int64_t i01 = ids ? ids[blockIdx.x] : blockIdx.x;
++        base_idx = i3*s03 + i2*s02 + i01*s01;
++    }
++
++    const float4 * x4 = (const float4 *) x;
++    block_q8_1_mmq * y = (block_q8_1_mmq *) vy;
++
++    const int64_t k_block = i0 / QK8_1_MMQ; // column block in the channel
++    const int64_t iqs     = i0 % QK8_1_MMQ; // quant index in block
++
++    float4 xi[2] = {make_float4(0.0f, 0.0f, 0.0f, 0.0f), make_float4(0.0f, 0.0f, 0.0f, 0.0f)};
++    if (i0 < ne00) {
++        xi[0] = x4[(base_idx + i0)/4 + 0];
++        xi[1] = x4[(base_idx + i0)/4 + 1];
++    }
++
++    float amax = fabsf(xi[0].x);
++    amax = fmaxf(amax, fabsf(xi[0].y));
++    amax = fmaxf(amax, fabsf(xi[0].z));
++    amax = fmaxf(amax, fabsf(xi[0].w));
++    amax = fmaxf(amax, fabsf(xi[1].x));
++    amax = fmaxf(amax, fabsf(xi[1].y));
++    amax = fmaxf(amax, fabsf(xi[1].z));
++    amax = fmaxf(amax, fabsf(xi[1].w));
++
++    // Exchange max. abs. value between the threads of the scale block.
++#pragma unroll
++    for (int offset = GGML_CUDA_MMQ_Q8K_BLOCK/vals_per_thread/2; offset > 0; offset >>= 1) {
++        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset, WARP_SIZE));
++    }
++
++    const float d     = amax / 127.0f;
++    const float d_inv = amax > 0.0f ? 127.0f / amax : 0.0f;
++
++    char4 q[2];
++    q[0].x = roundf(xi[0].x*d_inv);
++    q[0].y = roundf(xi[0].y*d_inv);
++    q[0].z = roundf(xi[0].z*d_inv);
++    q[0].w = roundf(xi[0].w*d_inv);
++    q[1].x = roundf(xi[1].x*d_inv);
++    q[1].y = roundf(xi[1].y*d_inv);
++    q[1].z = roundf(xi[1].z*d_inv);
++    q[1].w = roundf(xi[1].w*d_inv);
++
++    // Sum of the quantized values across the 4 threads of a 32 value sub-block.
++    int bsum = q[0].x + q[0].y + q[0].z + q[0].w + q[1].x + q[1].y + q[1].z + q[1].w;
++#pragma unroll
++    for (int offset = QK8_1/vals_per_thread/2; offset > 0; offset >>= 1) {
++        bsum += __shfl_xor_sync(0xFFFFFFFF, bsum, offset, WARP_SIZE);
++    }
++
++    // write the block once (normal) or to each of the token's compact rows (scatter)
++    const int nwrite = scatter ? n_expert_used : 1;
++#pragma unroll
++    for (int slot = 0; slot < nwrite; ++slot) {
++        int64_t ib;
++        if constexpr (scatter) {
++            const int64_t i = ids[(int64_t) blockIdx.x * n_expert_used + slot];
++            ib = k_block*ne1 + i;
++        } else {
++            const int64_t ib0 = blockIdx.z*((int64_t) ne1*(ne0/QK8_1_MMQ)); // first block of channel
++            ib = ib0 + k_block*ne1 + blockIdx.x;
++        }
++
++        char4 * yqs4 = (char4 *) y[ib].qs;
++        yqs4[iqs/4 + 0] = q[0];
++        yqs4[iqs/4 + 1] = q[1];
++
++        if (iqs % QK8_1 == 0) {
++            y[ib].dk.bs[iqs/QK8_1] = bsum;
++        }
++        if (iqs == 0) {
++            y[ib].dk.d = d;
++        }
++    }
++    GGML_UNUSED(n_expert_used);
++}
++
+ void quantize_row_q8_1_cuda(
+         const float * x, const int32_t * ids, void * vy, const ggml_type type_src0,
+         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+@@ -596,6 +698,14 @@ void quantize_mmq_q8_1_cuda(
+             quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D2S6, false>
+                 <<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2, /*n_expert_used=*/0);
+             break;
++        case MMQ_Q8_1_DS_LAYOUT_DK: {
++            GGML_ASSERT(ne00 % 8 == 0);
++            GGML_ASSERT(ne0 % GGML_CUDA_MMQ_Q8K_BLOCK == 0);
++            const int64_t block_num_y_dk = (ne0 + 8*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (8*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
++            const dim3 num_blocks_dk(ne1, block_num_y_dk, ne2*ne3);
++            quantize_mmq_q8_K<false>
++                <<<num_blocks_dk, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2, /*n_expert_used=*/0);
++        } break;
+         default:
+             GGML_ABORT("fatal error");
+             break;
+@@ -626,6 +736,14 @@ void quantize_scatter_mmq_q8_1_cuda(
+             quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D2S6, true><<<num_blocks, block_size, 0, stream>>>(
+                 x, ids_src1_inv, vy, ne00, /*s01=*/0, /*s02=*/stride_token, /*s03=*/0, ne0, /*ne1=*/(int) nrows_dst, /*ne2=*/1, n_expert_used);
+             break;
++        case MMQ_Q8_1_DS_LAYOUT_DK: {
++            GGML_ASSERT(ne00 % 8 == 0);
++            GGML_ASSERT(ne0 % GGML_CUDA_MMQ_Q8K_BLOCK == 0);
++            const int64_t block_num_y_dk = (ne0 + 8*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (8*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
++            const dim3 num_blocks_dk(n_tokens, block_num_y_dk, 1);
++            quantize_mmq_q8_K<true><<<num_blocks_dk, block_size, 0, stream>>>(
++                x, ids_src1_inv, vy, ne00, /*s01=*/0, /*s02=*/stride_token, /*s03=*/0, ne0, /*ne1=*/(int) nrows_dst, /*ne2=*/1, n_expert_used);
++        } break;
+         default:
+             GGML_ABORT("fatal error");
+             break;
+diff --git a/ggml/src/ggml-cuda/vecdotq.cuh b/ggml/src/ggml-cuda/vecdotq.cuh
+index f8ffae430..b6ba5d991 100644
+--- a/ggml/src/ggml-cuda/vecdotq.cuh
++++ b/ggml/src/ggml-cuda/vecdotq.cuh
+@@ -268,6 +268,15 @@ static __device__ __forceinline__ int ggml_cuda_mul_scale(const int a, const int
+ #endif // defined(GGML_USE_HIP)
+ }
+ 
++// a*b + c with the same 24 bit operands as ggml_cuda_mul_scale; on AMD this folds into one full-rate v_mad_i32_i24.
++static __device__ __forceinline__ int ggml_cuda_mad_scale(const int a, const int b, const int c) {
++#if defined(GGML_USE_HIP)
++    return __mul24(a, b) + c;
++#else
++    return a*b + c;
++#endif // defined(GGML_USE_HIP)
++}
++
+ template <int vdr> static __device__ __forceinline__ float vec_dot_q8_1_q8_1_impl(
+     const int * v, const int * u, const half2 & dm8, const half2 & ds8) {
+ 
+@@ -686,6 +695,73 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_mmq(
+     return d6 * sumf_d;
+ }
+ 
++// GGML_CUDA_MMQ_Q8K: the y data has 1 scale per 256 values (block_q8_1_mmq::dk), so the K-quant sub-block scales stay in
++// the integer domain: sumi += sc*dot and summ += m*bsum over the 64 values of one call, 1 float conversion per call.
++// Operand bounds for the 24 bit multiplies: sc, m <= 63 (Q6_K: |sc| <= 127), |dot| <= 32*31*127, |bsum| <= 32*127.
++
++// contiguous v/x + u/y values, 2 sub-blocks of 32 values
++static __device__ __forceinline__ void vec_dot_q4_K_q8_K_impl_mmq(
++    const int * __restrict__ v, const int * __restrict__ u, const uint8_t * __restrict__ sc,
++    const uint8_t * __restrict__ m, const int16_t * __restrict__ bs, int & sumi, int & summ) {
++
++#pragma unroll
++    for (int i = 0; i < QR4_K*VDR_Q4_K_Q8_1_MMQ/QI8_1; ++i) {
++        int sumi_d = 0;
++
++#pragma unroll
++        for (int j = 0; j < QI8_1; ++j) {
++            sumi_d = ggml_cuda_dp4a((v[j] >> (4*i)) & 0x0F0F0F0F, u[i*QI8_1 + j], sumi_d); // SIMD dot product
++        }
++
++        sumi = ggml_cuda_mad_scale(sc[i], sumi_d, sumi);
++        summ = ggml_cuda_mad_scale( m[i],  bs[i], summ);
++    }
++}
++
++// contiguous v/x + u/y values, 2 sub-blocks of 32 values
++static __device__ __forceinline__ void vec_dot_q5_K_q8_K_impl_mmq(
++    const int * __restrict__ v, const int * __restrict__ u, const uint8_t * __restrict__ sc,
++    const uint8_t * __restrict__ m, const int16_t * __restrict__ bs, int & sumi, int & summ) {
++
++#pragma unroll
++    for (int i = 0; i < QR5_K*VDR_Q5_K_Q8_1_MMQ/QI8_1; ++i) {
++        int sumi_d = 0;
++
++#pragma unroll
++        for (int j = 0; j < QI8_1; ++j) {
++            sumi_d = ggml_cuda_dp4a(v[i*QI8_1 + j], u[i*QI8_1 + j], sumi_d); // SIMD dot product
++        }
++
++        sumi = ggml_cuda_mad_scale(sc[i], sumi_d, sumi);
++        summ = ggml_cuda_mad_scale( m[i],  bs[i], summ);
++    }
++}
++
++// contiguous v/x + u/y values, 4 sub-blocks of 16 values
++static __device__ __forceinline__ void vec_dot_q6_K_q8_K_impl_mmq(
++    const int * __restrict__ v, const int * __restrict__ u, const int8_t * __restrict__ sc, int & sumi) {
++
++    const int      sc_packed = get_int_b4(sc, 0);
++    const int8_t * sc_reg    = (const int8_t *) &sc_packed;
++
++#pragma unroll
++    for (int i0 = 0; i0 < VDR_Q6_K_Q8_1_MMQ; i0 += 4) {
++        int2 sumi_d = {0, 0}; // 2 q6_K scales per 32 values
++
++#pragma unroll
++        for (int i = i0; i < i0 + 2; ++i) {
++            sumi_d.x = ggml_cuda_dp4a(v[2*i+0], u[2*i+0], sumi_d.x); // SIMD dot product
++            sumi_d.x = ggml_cuda_dp4a(v[2*i+1], u[2*i+1], sumi_d.x); // SIMD dot product
++
++            sumi_d.y = ggml_cuda_dp4a(v[2*i+4], u[2*i+4], sumi_d.y); // SIMD dot product
++            sumi_d.y = ggml_cuda_dp4a(v[2*i+5], u[2*i+5], sumi_d.y); // SIMD dot product
++        }
++
++        sumi = ggml_cuda_mad_scale(sc_reg[i0/2+0], sumi_d.x, sumi);
++        sumi = ggml_cuda_mad_scale(sc_reg[i0/2+1], sumi_d.y, sumi);
++    }
++}
++
+ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
+     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+ 
+diff --git a/ggml/src/ggml-hip/CMakeLists.txt b/ggml/src/ggml-hip/CMakeLists.txt
+index a6a6b7271..581ac6997 100644
+--- a/ggml/src/ggml-hip/CMakeLists.txt
++++ b/ggml/src/ggml-hip/CMakeLists.txt
+@@ -89,6 +89,10 @@ if (GGML_CUDA_FORCE_MMQ)
+     add_compile_definitions(GGML_CUDA_FORCE_MMQ)
+ endif()
+ 
++if (GGML_CUDA_MMQ_Q8K)
++    add_compile_definitions(GGML_CUDA_MMQ_Q8K)
++endif()
++
+ if (GGML_CUDA_FORCE_CUBLAS)
+     add_compile_definitions(GGML_CUDA_FORCE_CUBLAS)
+ endif()
+-- 
+2.53.0
+

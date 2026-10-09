@@ -1,0 +1,32 @@
+From fb5d45967473b6224de366ac0afa294bd7b321df Mon Sep 17 00:00:00 2001
+From: xjc10 <69450118+xjc10@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 15:28:06 -0400
+Subject: [PATCH 6/6] ggml-cuda: q8_0 dot chains start as VOP3P on RDNA2
+ (ggml_cuda_dp4a_z in vec_dot_q8_0_q8_1_impl)
+
+E378 b8 on gfx1030: MMQ q8_0 33.9 -> 35.1 TFLOPS, iq3_s 30.9 -> 31.7, iq4_xs 33.8 -> 34.9;
+MMVQ n=1/8 unchanged.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ ggml/src/ggml-cuda/vecdotq.cuh | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/ggml/src/ggml-cuda/vecdotq.cuh b/ggml/src/ggml-cuda/vecdotq.cuh
+index 2feb2cf22..c3863e6fe 100644
+--- a/ggml/src/ggml-cuda/vecdotq.cuh
++++ b/ggml/src/ggml-cuda/vecdotq.cuh
+@@ -250,8 +250,8 @@ template <typename T, int vdr> static __device__ __forceinline__ T vec_dot_q8_0_
+ 
+ #pragma unroll
+     for (int i = 0; i < vdr; ++i) {
+-        // SIMD dot product of quantized values
+-        sumi = ggml_cuda_dp4a(v[i], u[i], sumi);
++        // SIMD dot product of quantized values; dp4a_z: the chain head as a VOP3P dot product on RDNA2 (E378 b8)
++        sumi = ggml_cuda_dp4a_z(v[i], u[i], sumi);
+     }
+ 
+     return d8_0*d8_1 * ((T) sumi);
+-- 
+2.53.0
+

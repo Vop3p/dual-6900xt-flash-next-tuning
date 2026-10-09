@@ -16,6 +16,8 @@
 
 在一台家用机器（**2× AMD RX 6900 XT，gfx1030，各 PCIe 4.0 x8 / Ryzen 5 5600X / 128 GB DDR4**，ROCm 10.0）上跑 **Qwen3.8-Flash-Next（GSQ-RCO IQ3_S）** 的调优记录，从 llama.cpp 到 [Strata](https://github.com/Niko1221/Strata)，2026-09-21 → 10-08。
 
+`patches/llama.cpp/` 是时间线里 `q8k ggml` 那一步背后的 6 个 llama.cpp 补丁（RDNA2 MMQ：更宽的 tile、mad24 缩放、Q8_K 式激活、dot 链头 VOP3P），基于上游 `159c651f5`，编译选项和实测见[其 README](patches/llama.cpp/README.md)（英文）；Strata 通过 `-DSTRATA_GGML_DIR` 直接用上。
+
 `bench/` 是 A/B 骨架：`run_ab.sh`（每臂一个冷启动 server、全量日志、确认行核对）、`benchmark.py`（负载）、`ab_compare.py`（逐请求对比文本与速度）、`monitor_amd.py`（遥测采样）。路径是占位符，按自己的机器改。
 
 Developed with an AI coding assistant; every number here was measured on the machine above.

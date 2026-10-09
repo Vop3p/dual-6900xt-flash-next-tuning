@@ -1,0 +1,74 @@
+From e67e780ad79b4beb7bfb6f09aac70c1de59c717a Mon Sep 17 00:00:00 2001
+From: xjc10 <69450118+xjc10@users.noreply.github.com>
+Date: Fri, 2 Oct 2026 03:40:06 -0400
+Subject: [PATCH 3/6] ggml-cuda: full-rate 24-bit scale multiplies in the
+ K-quant MMQ dot products on HIP
+
+The Q4_K/Q5_K/Q6_K MMQ dot products multiply each dp4a sub-block sum by an
+integer scale. The compiler emits v_mul_lo_u32 (and v_mad_u64_u32 for Q6_K)
+for it, which run at quarter rate on RDNA2. Both factors fit in 24 signed bits
+(scales <= 63, sums <= 32*31*128), so __mul24 gives bit-identical results at
+full rate.
+
+RX 6900 XT, test-backend-ops perf on the Qwen3.8-27B shapes (n=512): weighted
+480 -> 429 ms (-10.7%; Q5_K -7..8%, Q6_K -13..14%). Qwen3.8-27B Q5_K_XL, -sm
+tensor on 2x 6900 XT: prefill +8..9% (2.5K-32K). KLD vs BF16 unchanged
+(0.003941), MUL_MAT q4_K/q5_K/q6_K 106/106 and 14 real shapes pass.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ggml/src/ggml-cuda/vecdotq.cuh | 17 ++++++++++++++---
+ 1 file changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/ggml/src/ggml-cuda/vecdotq.cuh b/ggml/src/ggml-cuda/vecdotq.cuh
+index f65fe530e..f8ffae430 100644
+--- a/ggml/src/ggml-cuda/vecdotq.cuh
++++ b/ggml/src/ggml-cuda/vecdotq.cuh
+@@ -257,6 +257,17 @@ template <typename T, int vdr> static __device__ __forceinline__ T vec_dot_q8_0_
+     return d8_0*d8_1 * ((T) sumi);
+ }
+ 
++// integer scale x dp4a sum for the K-quant MMQ dot products. Both factors fit in 24 signed bits (scales <= 63,
++// sub-block sums <= 32*31*128), so on AMD a 24-bit multiply gives the same result at full rate instead of the
++// quarter-rate v_mul_lo_u32 / v_mad_u64_u32 the compiler emits for a 32-bit product (E202).
++static __device__ __forceinline__ int ggml_cuda_mul_scale(const int a, const int b) {
++#if defined(GGML_USE_HIP)
++    return __mul24(a, b);
++#else
++    return a*b;
++#endif // defined(GGML_USE_HIP)
++}
++
+ template <int vdr> static __device__ __forceinline__ float vec_dot_q8_1_q8_1_impl(
+     const int * v, const int * u, const half2 & dm8, const half2 & ds8) {
+ 
+@@ -548,7 +559,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_mmq(
+ 
+         const float2 ds8f = __half22float2(ds8[i]);
+ 
+-        sumf_d += ds8f.x * (sc[i] * sumi_d);
++        sumf_d += ds8f.x * ggml_cuda_mul_scale(sc[i], sumi_d);
+         sumf_m += ds8f.y *   m[i]; // sum of q8_1 block * q4_K min val
+     }
+ 
+@@ -611,7 +622,7 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_mmq(
+ 
+         const float2 ds8f = __half22float2(ds8[i]);
+ 
+-        sumf_d += ds8f.x * (sc[i] * sumi_d);
++        sumf_d += ds8f.x * ggml_cuda_mul_scale(sc[i], sumi_d);
+         sumf_m += ds8f.y *   m[i]; // sum of q8_1 block * q4_K min val
+     }
+ 
+@@ -669,7 +680,7 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_mmq(
+             sumi_d.y = ggml_cuda_dp4a(v[2*i+5], u[2*i+5], sumi_d.y); // SIMD dot product
+         }
+ 
+-        sumf_d += d8[i0/4] * (sc_reg[i0/2+0]*sumi_d.x + sc_reg[i0/2+1]*sumi_d.y);
++        sumf_d += d8[i0/4] * (ggml_cuda_mul_scale(sc_reg[i0/2+0], sumi_d.x) + ggml_cuda_mul_scale(sc_reg[i0/2+1], sumi_d.y));
+     }
+ 
+     return d6 * sumf_d;
+-- 
+2.53.0
+

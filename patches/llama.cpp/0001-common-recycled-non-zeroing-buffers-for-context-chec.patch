@@ -1,0 +1,202 @@
+From 0174c0e0984a85667da78975b37a82e3ef4e316a Mon Sep 17 00:00:00 2001
+From: xjc10 <69450118+xjc10@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 00:37:52 -0400
+Subject: [PATCH 1/6] common: recycled, non-zeroing buffers for context
+ checkpoints
+
+Context checkpoints of the hybrid Qwen3.8 model are 149.6 MiB and two are
+taken per prompt. std::vector<uint8_t>::resize zero-filled fresh memory
+(57 ms incl. first-touch faults) and the device->host copy into it ran at
+2.7 GB/s (59 ms). A pooled allocator that recycles blocks and
+default-initializes makes resize free and the copy 29 ms (5.3 GB/s), so a
+2.5K-token prompt prefills ~5% faster end-to-end on 2x RX 6900 XT.
+Optional pinned blocks (LLAMA_PINNED_CKPT=1) gave no further gain: the
+copy is many small synchronous per-tensor reads. LLAMA_CKPT_TIMING=1 logs
+the breakdown. Multi-turn prefix reuse verified identical to base.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ common/common.cpp | 97 +++++++++++++++++++++++++++++++++++++++++++++++
+ common/common.h   | 29 +++++++++++++-
+ 2 files changed, 124 insertions(+), 2 deletions(-)
+
+diff --git a/common/common.cpp b/common/common.cpp
+index 7ebfa2610..38cae9ba6 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -5,6 +5,9 @@
+ #include "common.h"
+ #include "fit.h"
+ #include "log.h"
++#include <mutex>
++#include <unordered_map>
++#include <cstdlib>
+ #include "llama.h"
+ #include "sampling.h"
+ #include "speculative.h"
+@@ -2285,6 +2288,91 @@ void common_prompt_checkpoint::update_pos(
+     this->pos_max  = pos_max;
+ }
+ 
++// ---- E179 state buffer pool -------------------------------------------------
++namespace {
++struct state_buf_block { void * ptr; size_t cap; ggml_backend_buffer_t buf; };
++struct state_buf_pool {
++    std::mutex mtx;
++    std::vector<state_buf_block> free_blocks;
++    std::unordered_map<void *, state_buf_block> live;
++    size_t pinned_live = 0;
++    int    enabled = -1;       // -1 unknown
++    size_t budget = 0;
++    ggml_backend_buffer_type_t host_buft = nullptr;
++
++    void init() {
++        if (enabled >= 0) return;
++        const char * e = getenv("LLAMA_PINNED_CKPT");
++        enabled = (e && atoi(e) == 1) ? 1 : 0;
++        const char * b = getenv("LLAMA_PINNED_CKPT_BUDGET_MB");
++        budget = (size_t) (b ? atoll(b) : 4096) << 20;
++        if (enabled) {
++            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
++                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
++                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
++                    host_buft = ggml_backend_dev_host_buffer_type(dev);
++                    if (host_buft) break;
++                }
++            }
++            if (!host_buft) enabled = 0;
++        }
++    }
++};
++state_buf_pool & g_state_pool() { static state_buf_pool * p = new state_buf_pool(); return *p; } // leaked on purpose (runtime teardown order)
++}
++
++void * common_state_buf_alloc(size_t n) {
++    if (n == 0) return nullptr;
++    auto & P = g_state_pool();
++    std::lock_guard<std::mutex> lk(P.mtx);
++    P.init();
++    // best fit among recycled blocks (no more than 25% slack)
++    size_t best = SIZE_MAX;
++    for (size_t i = 0; i < P.free_blocks.size(); ++i) {
++        const auto & fb = P.free_blocks[i];
++        if (fb.cap >= n && fb.cap <= n + n / 4 && (best == SIZE_MAX || fb.cap < P.free_blocks[best].cap)) best = i;
++    }
++    if (best != SIZE_MAX) {
++        state_buf_block blk = P.free_blocks[best];
++        P.free_blocks.erase(P.free_blocks.begin() + best);
++        P.live[blk.ptr] = blk;
++        return blk.ptr;
++    }
++    state_buf_block blk = { nullptr, n, nullptr };
++    if (P.enabled == 1 && P.pinned_live + n <= P.budget) {
++        blk.buf = ggml_backend_buft_alloc_buffer(P.host_buft, n);
++        if (blk.buf) {
++            blk.ptr = ggml_backend_buffer_get_base(blk.buf);
++            P.pinned_live += n;
++        }
++    }
++    if (!blk.ptr) {
++        blk.ptr = std::malloc(n);
++        if (!blk.ptr) throw std::bad_alloc();
++    }
++    P.live[blk.ptr] = blk;
++    return blk.ptr;
++}
++
++void common_state_buf_free(void * p, size_t /*n*/) {
++    if (!p) return;
++    auto & P = g_state_pool();
++    std::lock_guard<std::mutex> lk(P.mtx);
++    auto it = P.live.find(p);
++    if (it == P.live.end()) return;
++    state_buf_block blk = it->second;
++    P.live.erase(it);
++    P.free_blocks.push_back(blk);
++    // keep a few recycled blocks; release the oldest beyond that
++    while (P.free_blocks.size() > 4) {
++        state_buf_block old = P.free_blocks.front();
++        P.free_blocks.erase(P.free_blocks.begin());
++        if (old.buf) { P.pinned_live -= old.cap; ggml_backend_buffer_free(old.buf); }
++        else { std::free(old.ptr); }
++    }
++}
++// ------------------------------------------------------------------------------
++
+ void common_prompt_checkpoint::update_tgt(
+         llama_context * ctx,
+         llama_seq_id seq_id,
+@@ -2293,14 +2381,23 @@ void common_prompt_checkpoint::update_tgt(
+         return;
+     }
+ 
++    const int64_t t0 = ggml_time_us();
+     const size_t ckpt_size = llama_state_seq_get_size_ext(ctx, seq_id, flags);
++    const int64_t t1 = ggml_time_us();
+ 
+     data_tgt.resize(ckpt_size);
++    const int64_t t2 = ggml_time_us();
+ 
+     const size_t n = llama_state_seq_get_data_ext(ctx, data_tgt.data(), ckpt_size, seq_id, flags);
+     if (n != ckpt_size) {
+         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", ckpt_size, n);
+     }
++    const int64_t t3 = ggml_time_us();
++    if (getenv("LLAMA_CKPT_TIMING")) {
++        LOG_WRN("E179 ckpt tgt: %.1f MiB | get_size %.1f ms | resize %.1f ms | get_data %.1f ms (%.2f GB/s)\n",
++                ckpt_size / 1048576.0, (t1 - t0) / 1e3, (t2 - t1) / 1e3, (t3 - t2) / 1e3,
++                ckpt_size / 1e9 / ((t3 - t2) / 1e6 + 1e-9));
++    }
+ }
+ 
+ void common_prompt_checkpoint::update_dft(
+diff --git a/common/common.h b/common/common.h
+index fd90c3b95..44e85e343 100644
+--- a/common/common.h
++++ b/common/common.h
+@@ -1238,6 +1238,31 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
+ // prompt utils
+ //
+ 
++// E179: allocator for large host-side state buffers (context checkpoints).
++// Blocks come from a process-wide pool of pinned host memory (backend host
++// buffer type, i.e. hipHostMalloc/cudaMallocHost) that is recycled instead of
++// freed, and elements are default-initialized (no zero fill). A fresh
++// std::vector<uint8_t> paid ~57 ms of zero-fill + first-touch page faults and
++// its device->pageable copy ran at ~2.7 GB/s for a 150 MiB checkpoint.
++// LLAMA_PINNED_CKPT=1 enables pinning (else plain malloc, still no zero fill);
++// LLAMA_PINNED_CKPT_BUDGET_MB caps live pinned bytes (default 4096).
++void * common_state_buf_alloc(size_t n_bytes);
++void   common_state_buf_free(void * p, size_t n_bytes);
++
++template <class T>
++struct common_state_buf_allocator {
++    using value_type = T;
++    common_state_buf_allocator() noexcept = default;
++    template <class U> common_state_buf_allocator(const common_state_buf_allocator<U> &) noexcept {}
++    T * allocate(size_t n) { return static_cast<T *>(common_state_buf_alloc(n * sizeof(T))); }
++    void deallocate(T * p, size_t n) noexcept { common_state_buf_free(p, n * sizeof(T)); }
++    template <class U> void construct(U * p) noexcept { ::new (static_cast<void *>(p)) U; }
++    template <class U, class... A> void construct(U * p, A &&... a) { ::new (static_cast<void *>(p)) U(std::forward<A>(a)...); }
++    template <class U> bool operator==(const common_state_buf_allocator<U> &) const noexcept { return true; }
++    template <class U> bool operator!=(const common_state_buf_allocator<U> &) const noexcept { return false; }
++};
++using common_state_buf = std::vector<uint8_t, common_state_buf_allocator<uint8_t>>;
++
+ struct common_prompt_checkpoint {
+     int64_t n_tokens;
+ 
+@@ -1247,8 +1272,8 @@ struct common_prompt_checkpoint {
+     llama_pos pos_min;
+     llama_pos pos_max;
+ 
+-    std::vector<uint8_t> data_tgt;
+-    std::vector<uint8_t> data_dft;
++    common_state_buf data_tgt;
++    common_state_buf data_dft;
+ 
+     // (optional) speculative-decoding implementation state stashed with the checkpoint
+     // (e.g. eagle3's deferred-boundary g_embd row)
+-- 
+2.53.0
+

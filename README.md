@@ -16,6 +16,8 @@
 
 Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AMD RX 6900 XT (gfx1030, PCIe 4.0 x8 each) / Ryzen 5 5600X / 128 GB DDR4**, ROCm 10.0 — from llama.cpp to [Strata](https://github.com/Niko1221/Strata), 2026-09-21 → 10-08. Experiment numbers (E…) refer to the author's lab notebook (not public). Every number is measured on this machine unless marked as an estimate.
 
+**`patches/llama.cpp/`** — the six llama.cpp patches behind the `q8k ggml` step (RDNA2 MMQ: wider tiles, mad24 scales, Q8_K-style activations, VOP3P dot-chain heads), on upstream `159c651f5`, with build flags and measured effects in [their README](patches/llama.cpp/README.md). Strata picks them up through `-DSTRATA_GGML_DIR`.
+
 ## 0. Where it stands
 
 - **Production (since 10-08 21:25):** Strata upstream 0.1.41 + 7 local patches (upstream PRs #1149 / #1151 / #1167 + a per-device rocBLAS solution cache) + a modified llama.cpp ggml (MMQ dot-chain heads in the VOP3P encoding on RDNA2). Two-card layer split, IQ3_S experts, int8 KV, MTP `--spec 4 --spec-min-p 0.5`.
