@@ -7,7 +7,9 @@ date-released: 2026-10-09
 version: "2026-10-09"
 url: "https://github.com/xjc10/dual-6900xt-flash-next-tuning"
 repository-code: "https://github.com/xjc10/dual-6900xt-flash-next-tuning"
-license: MIT
+license:
+  - MIT
+  - CC-BY-NC-4.0
 keywords:
   - llama.cpp
   - Strata

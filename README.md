@@ -18,7 +18,7 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 
 **`patches/llama.cpp/`** — the six llama.cpp patches behind the `q8k ggml` step (RDNA2 MMQ: wider tiles, mad24 scales, Q8_K-style activations, VOP3P dot-chain heads), on upstream `159c651f5`, with build flags and measured effects in [their README](patches/llama.cpp/README.md). Strata picks them up through `-DSTRATA_GGML_DIR`.
 
-**License:** MIT for everything here — text, figures, scripts and the llama.cpp patches (`LICENSE`; the patches carry their own copy, the same license as llama.cpp). `CITATION.cff` has a citation entry.
+**License:** the llama.cpp patches (`patches/`) and the scripts (`bench/`) are MIT, the same license as llama.cpp, so they can be taken, merged and shipped; the text, figures and measurement data are CC BY-NC 4.0 (attribution, no commercial use). See `LICENSE`. `CITATION.cff` has a citation entry.
 
 ## 0. Where it stands
 

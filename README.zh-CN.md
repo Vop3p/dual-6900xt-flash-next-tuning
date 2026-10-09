@@ -18,7 +18,7 @@
 
 `patches/llama.cpp/` 是时间线里 `q8k ggml` 那一步背后的 6 个 llama.cpp 补丁（RDNA2 MMQ：更宽的 tile、mad24 缩放、Q8_K 式激活、dot 链头 VOP3P），基于上游 `159c651f5`，编译选项和实测见[其 README](patches/llama.cpp/README.md)（英文）；Strata 通过 `-DSTRATA_GGML_DIR` 直接用上。
 
-**许可**：整个仓库 MIT（文字、图、脚本、llama.cpp 补丁；补丁目录另带一份，与 llama.cpp 同一许可），`CITATION.cff` 可直接引用。
+**许可**：llama.cpp 补丁（`patches/`）和脚本（`bench/`）是 MIT，与 llama.cpp 相同，可以直接拿走、合并、随软件分发；文字、图和测量数据是 CC BY-NC 4.0（署名、禁止商用）。见 `LICENSE`；`CITATION.cff` 可直接引用。
 
 `bench/` 是 A/B 骨架：`run_ab.sh`（每臂一个冷启动 server、全量日志、确认行核对）、`benchmark.py`（负载）、`ab_compare.py`（逐请求对比文本与速度）、`monitor_amd.py`（遥测采样）。路径是占位符，按自己的机器改。
 
