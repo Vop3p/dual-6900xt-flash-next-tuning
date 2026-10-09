@@ -1,5 +1,5 @@
 From b10f2478cc447516b3e9a73a45ae23ebfe369fcd Mon Sep 17 00:00:00 2001
-From: xjc10 <69450118+xjc10@users.noreply.github.com>
+From: Vop3p <69450118+Vop3p@users.noreply.github.com>
 Date: Tue, 29 Sep 2026 00:51:27 -0400
 Subject: [PATCH 2/6] ggml-cuda: RDNA2 MMQ J=80..128 tiles for Q4_K/Q5_K/Q6_K
 

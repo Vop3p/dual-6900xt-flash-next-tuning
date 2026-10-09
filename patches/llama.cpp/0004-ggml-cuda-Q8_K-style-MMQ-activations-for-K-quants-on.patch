@@ -1,5 +1,5 @@
 From aa146da57e5149d5452bf490d6a1ac9f8454b442 Mon Sep 17 00:00:00 2001
-From: xjc10 <69450118+xjc10@users.noreply.github.com>
+From: Vop3p <69450118+Vop3p@users.noreply.github.com>
 Date: Thu, 8 Oct 2026 14:39:42 -0400
 Subject: [PATCH 4/6] ggml-cuda: Q8_K style MMQ activations for K-quants on the
  dp4a path (opt-in GGML_CUDA_MMQ_Q8K)

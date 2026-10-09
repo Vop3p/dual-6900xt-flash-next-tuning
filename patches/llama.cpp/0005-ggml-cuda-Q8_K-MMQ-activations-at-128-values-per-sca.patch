@@ -1,5 +1,5 @@
 From d6f8aedd4006f87717c73403e54c8fde90eaa5a3 Mon Sep 17 00:00:00 2001
-From: xjc10 <69450118+xjc10@users.noreply.github.com>
+From: Vop3p <69450118+Vop3p@users.noreply.github.com>
 Date: Thu, 8 Oct 2026 15:24:06 -0400
 Subject: [PATCH 5/6] ggml-cuda: Q8_K MMQ activations at 128 values per scale;
  q6_K dot chains start as VOP3P on RDNA2

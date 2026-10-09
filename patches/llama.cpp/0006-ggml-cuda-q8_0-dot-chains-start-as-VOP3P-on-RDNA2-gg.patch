@@ -1,5 +1,5 @@
 From fb5d45967473b6224de366ac0afa294bd7b321df Mon Sep 17 00:00:00 2001
-From: xjc10 <69450118+xjc10@users.noreply.github.com>
+From: Vop3p <69450118+Vop3p@users.noreply.github.com>
 Date: Thu, 8 Oct 2026 15:28:06 -0400
 Subject: [PATCH 6/6] ggml-cuda: q8_0 dot chains start as VOP3P on RDNA2
  (ggml_cuda_dp4a_z in vec_dot_q8_0_q8_1_impl)

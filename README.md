@@ -1,6 +1,6 @@
 # dual-6900xt-flash-next-tuning
 
-[中文](README.zh-CN.md) · **Interactive timeline: https://xjc10.github.io/dual-6900xt-flash-next-tuning/** (Chinese; every step filterable by line of attack)
+[中文](README.zh-CN.md) · **Interactive timeline: https://vop3p.github.io/dual-6900xt-flash-next-tuning/** (Chinese; every step filterable by line of attack)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/now-en-dark.png">

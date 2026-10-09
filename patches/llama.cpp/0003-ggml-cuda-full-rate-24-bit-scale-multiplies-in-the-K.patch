@@ -1,5 +1,5 @@
 From e67e780ad79b4beb7bfb6f09aac70c1de59c717a Mon Sep 17 00:00:00 2001
-From: xjc10 <69450118+xjc10@users.noreply.github.com>
+From: Vop3p <69450118+Vop3p@users.noreply.github.com>
 Date: Fri, 2 Oct 2026 03:40:06 -0400
 Subject: [PATCH 3/6] ggml-cuda: full-rate 24-bit scale multiplies in the
  K-quant MMQ dot products on HIP
