@@ -1,0 +1,34 @@
+From 6a4aeb19ff2c1d30a7cc0922ec9c973cbff8183d Mon Sep 17 00:00:00 2001
+From: Vop3p <69450118+Vop3p@users.noreply.github.com>
+Date: Fri, 9 Oct 2026 05:54:50 -0400
+Subject: [PATCH] ggml-cuda: the q8_0_16 dot chains (IQ2_XS, IQ2_S MMQ tiles)
+ start as VOP3P on RDNA2
+
+vec_dot_q8_0_16_q8_1_impl is the only MMQ dot product that still began each chain with v_mov 0 + v_dot4c; the other
+MMQ tile layouts go through vec_dot_q8_0_q8_1_impl, which got ggml_cuda_dp4a_z earlier. test-backend-ops perf on an
+RX 6900 XT (gfx1030, 4096x512x14336): iq2_s 26.3 -> 28.5 TFLOPS (+9%), iq2_xs 26.9 -> 29.1 (+8%); iq3_xxs unchanged
+(control). MUL_MAT correctness: iq2_s / iq2_xs all cases pass.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ ggml/src/ggml-cuda/vecdotq.cuh | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/ggml/src/ggml-cuda/vecdotq.cuh b/ggml/src/ggml-cuda/vecdotq.cuh
+index c3863e6fe..2c6f40b83 100644
+--- a/ggml/src/ggml-cuda/vecdotq.cuh
++++ b/ggml/src/ggml-cuda/vecdotq.cuh
+@@ -314,8 +314,8 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q8_0_16_q8_1_
+ 
+ #pragma unroll
+         for (int i = i0; i < i0 + QI8_0/2; ++i) {
+-            // SIMD dot product of quantized values
+-            sumi = ggml_cuda_dp4a(v[i], u[i], sumi);
++            // SIMD dot product of quantized values; on RDNA2 the first link starts as VOP3P (see vec_dot_q8_0_q8_1_impl)
++            sumi = ggml_cuda_dp4a_z(v[i], u[i], sumi);
+         }
+ 
+         sumf += d8_0[i0/(QI8_0/2)]*sumi;
+-- 
+2.53.0
+

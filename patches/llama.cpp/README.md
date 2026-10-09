@@ -1,10 +1,10 @@
 # llama.cpp patches (RDNA2 / gfx1030 MMQ)
 
-Six patches on top of upstream [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `159c651f5` (2026-10-02). Apply with `git am`:
+Seven patches on top of upstream [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) `159c651f5` (2026-10-02). Apply with `git am`:
 
 ```bash
 git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp && git checkout 159c651f5
-git am /path/to/patches/llama.cpp/*.patch
+git am /path/to/patches/llama.cpp/*.patch   # 0001-0007
 cmake -B build -DGGML_HIP=ON -DGGML_HIP_RCCL=ON -DAMDGPU_TARGETS=gfx1030 -DGGML_CUDA_MMQ_Q8K=ON -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_HIP_COMPILER=/opt/rocm/lib/llvm/bin/clang++
 cmake --build build -j
@@ -18,6 +18,7 @@ cmake --build build -j
 | 4 | `Q8_K style MMQ activations for K-quants on the dp4a path` (opt-in `GGML_CUDA_MMQ_Q8K`) | activations quantised with one fp32 scale per 128 values + int16 sub-block sums (`MMQ_Q8_1_DS_LAYOUT_DK`), integer accumulation | kernel: q4_K 25.9→27.8, q5_K 25.9→28.0, q6_K 25.3→28.9 TFLOPS (test-backend-ops 4096x512x14336) |
 | 5 | `Q8_K MMQ activations at 128 values per scale; q6_K dot chains start as VOP3P` | `GGML_CUDA_MMQ_Q8K_BLOCK` default 128; `ggml_cuda_dp4a_z` (`v_dot4_i32_i8 d,a,b,0` instead of `v_mov 0` + `v_dot4c`) at the head of each q6_K dot chain | q6_K +4.7%; on q4_K/q5_K the same trick schedules 10% worse, so it is per type |
 | 6 | `q8_0 dot chains start as VOP3P on RDNA2` | the same for `vec_dot_q8_0_q8_1_impl` | q8_0 33.8→35.0, iq3_s 30.9→31.7 TFLOPS |
+| 7 | `the q8_0_16 dot chains (IQ2_XS, IQ2_S MMQ tiles) start as VOP3P on RDNA2` | the same for `vec_dot_q8_0_16_q8_1_impl`, the last MMQ dot product without it | iq2_s 26.3→28.5 (+9%), iq2_xs 26.9→29.1 (+8%); iq3_xxs unchanged. Note: in MMQ every IQ type except IQ2_XS/IQ2_S already goes through patch 6's function (Q8_0 tiles), so patches 6+7 cover all expert types of the IQ3_S pack (whose experts are a mix: gate/up IQ3_XXS/IQ3_S/IQ2_S/IQ4_XS, down IQ4_NL/Q2_0). End to end on Strata (2 cards, 32K): +0.6–1.1% |
 
 End to end (4–6 together, production `qwen38-tp`, Qwen3.8-27B UD-Q5_K_XL, two cards `-sm tensor`): prompt +4.6–6.1% across 4K–196K, KLD vs bf16 0.003941 → 0.003736 (top-1 agreement 97.32% → 97.12%, within the noise of the base quant). In [Strata](https://github.com/Niko1221/Strata), which takes its expert prompt GEMMs from this MMQ, building with `-DSTRATA_GGML_DIR=/path/to/this/llama.cpp` gives +1.5% at a 32K prompt with byte-identical output (iq3_s kernel +2.6%).
 
