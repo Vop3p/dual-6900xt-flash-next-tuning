@@ -101,7 +101,17 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 
 The same two cards also serve the dense Qwen3.8-27B through llama.cpp: `-sm tensor` (RCCL allreduce over the two x8 links through the host), q8_0 KV, 196K context, MTP draft (`--spec-draft-n-max 3`), three slots. Full attention, so none of Strata's expert/KV-streaming tricks apply; this is where the llama.cpp patches above were made, and patch 8 only exists for it. It is not on the interactive timeline page.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/q38-now-en-dark.png">
+  <img alt="Production state and speed of the 27B now" src="docs/q38-now-en-light.png" width="100%">
+</picture>
+
 **Where it stands (10-09 15:10):** production binary = upstream `159c651f5` + patches 1–8, env `GGML_FATTN_KQ8=1`. Prompt 740–820 tok/s up to 8K, 731 at 32K, 512 at 128K; decode 62 tok/s at short context (MTP: ~3.2 accepted tokens per 51 ms step), 44 at 32K depth, 25–28 at 128K. KLD vs bf16 0.003704, top-1 agreement 97.29% (stock kernels on the same quant: 0.003941 / 97.32%). Needles 8/8 at 32K, 4/4 at 128K. VRAM 15.8 GB per card at 196K.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/q38-speed-en-dark.png">
+  <img alt="Prompt and decode speed of the 27B at each production state, 09-26 to 10-09" src="docs/q38-speed-en-light.png" width="100%">
+</picture>
 
 | Date | Step | Measured effect |
 | --- | --- | --- |
@@ -118,6 +128,12 @@ The same two cards also serve the dense Qwen3.8-27B through llama.cpp: `-sm tens
 | 10-09 | E412 old vs new binary at short context | decode 62 ±1% both, 904-token prompt flat — patch 8 does not touch decode |
 
 **Where a short-context decode step goes (E411, per card per ~51 ms step, 3.2 tokens):**
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/q38-decode-en-dark.png">
+  <img alt="Breakdown of one short-context decode step on the 27B: MMVQ 47%, launch gaps 23%, lm_head 10.6%, RCCL 8%, the rest 11.4%" src="docs/q38-decode-en-light.png" width="100%">
+</picture>
+
 
 | Block | Share | Distance from the hardware |
 | --- | --- | --- |

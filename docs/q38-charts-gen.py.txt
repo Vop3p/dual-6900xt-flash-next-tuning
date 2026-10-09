@@ -1,0 +1,128 @@
+# Renders the 27B (qwen38-tp) figures for the tuning repo: now cards, speed chart, decode pie. en/zh x light/dark.
+import os, sys, asyncio
+OUT = "docs"
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+CSS = """
+:root{--bg:#f5f6f4;--panel:#ffffff;--ink:#1b2321;--muted:#5d6966;--rule:#d9dedb;
+--c1:#b8691c;--c2:#2f7a8c;--c3:#173f4f;--c4:#6a5aa8;--c5:#9aa6a2;
+--f-display:"Noto Serif SC","Songti SC",serif;--f-body:"Noto Sans SC","PingFang SC",system-ui,sans-serif;--f-data:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+:root[data-theme="dark"]{--bg:#121816;--panel:#1a2220;--ink:#e4ebe8;--muted:#9aa8a4;--rule:#2c3633;
+--c1:#e09a4f;--c2:#5fb3c6;--c3:#a9dbe8;--c4:#a99be0;--c5:#6f7c78}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.65}
+.fig{width:1100px;box-sizing:border-box;padding:16px}
+h2{font-family:var(--f-display);font-size:22px;margin:0 0 12px 0}
+.now{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.now div{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:12px 12px;display:grid;gap:4px;align-content:start;min-height:96px}
+.now b{font-family:var(--f-data);font-size:22px;font-weight:500}
+.now small{color:var(--muted);font-size:12.5px;line-height:1.45}
+.note{color:var(--muted);font-size:13px;margin-top:10px;max-width:980px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:var(--muted);margin-bottom:8px}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;background:var(--dot)}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:14px}
+.chart text{font-family:var(--f-data);font-size:11px;fill:var(--muted)}
+.bars{display:grid;gap:8px}
+.bar{display:grid;grid-template-columns:330px 1fr 56px;gap:10px;align-items:center;font-size:13px}
+.bar .lab{color:var(--ink)}
+.bar .lab small{display:block;color:var(--muted);font-size:12px;line-height:1.35}
+.bar .tr{background:var(--rule);border-radius:3px;height:14px;overflow:hidden}
+.bar .fl{height:100%;background:var(--fc)}
+.bar .v{font-family:var(--f-data);text-align:right}
+"""
+
+def fmt(v):
+    return f"{v:,.0f}" if v >= 100 else f"{v:g}"
+
+def speed_svg(lang):
+    # steps: (label line1, label line2, p2k, p8k, p32k, p128k, decode)
+    steps = [
+        ("docker image", "09-26", 617, 623, 566, None, None),
+        ("host + MMQ tiles", "09-29", 683, 677, 600, None, None),
+        ("mad24", "10-02", 774, 773, 674, None, None),
+        ("q8k ggml", "10-08", 812, 811, 705, 460.5, 62.9),
+        ("int8 QK FA", "10-09", 814, 820, 732, 511.6, 62.3),
+    ]
+    W, H = 1070, 520; L, R, T, B = 70, 70, 40, 90
+    n = len(steps); xs = [L + i * (W - L - R) / (n - 1) for i in range(n)]
+    ymax, dmax = 900, 90
+    def y(v): return T + (H - T - B) * (1 - v / ymax)
+    def yd(v): return T + (H - T - B) * (1 - v / dmax)
+    s = [f'<svg class="chart" viewBox="0 0 {W} {H}" width="{W}" height="{H}">']
+    for g in range(0, ymax + 1, 150):
+        s.append(f'<line x1="{L}" x2="{W-R}" y1="{y(g):.1f}" y2="{y(g):.1f}" stroke="var(--rule)"/>')
+        s.append(f'<text x="{L-8}" y="{y(g)+4:.1f}" text-anchor="end">{g:,}</text>')
+    for g in range(0, dmax + 1, 30):
+        s.append(f'<text x="{W-R+8}" y="{yd(g)+4:.1f}">{g}</text>')
+    s.append(f'<text x="{L}" y="{T-16}">tok/s</text><text x="{W-R+8}" y="{T-16}">{"解码" if lang=="zh" else "decode"}</text>')
+    series = [(2, "--c1", False), (3, "--c2", False), (4, "--c3", False), (5, "--c4", False), (6, "--c5", True)]
+    # (index, color, right axis)
+    series = [(2, "--c1", False), (4, "--c3", False), (5, "--c5", False), (6, "--c4", True)]
+    for idx, col, right in series:
+        pts = [(xs[i], (yd if right else y)(st[idx]), st[idx]) for i, st in enumerate(steps) if st[idx] is not None]
+        for (x0, y0, _), (x1, y1, _) in zip(pts, pts[1:]):
+            s.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" stroke="var({col})" stroke-width="3"/>')
+        for x0, y0, v in pts:
+            s.append(f'<circle cx="{x0:.1f}" cy="{y0:.1f}" r="5.5" fill="var({col})"/>')
+            dy = -10 if idx in (2, 4) else 20
+            if right and x0 == pts[-1][0]:
+                s.append(f'<text x="{x0-9:.1f}" y="{y0+dy:.1f}" text-anchor="end" style="fill:var({col})">{fmt(v)}</text>')
+            else:
+                s.append(f'<text x="{x0+8:.1f}" y="{y0+dy:.1f}" style="fill:var({col})">{fmt(v)}</text>')
+    for i, st in enumerate(steps):
+        yy = H - B + 22 + (0 if i % 2 == 0 else 34)
+        s.append(f'<text x="{xs[i]:.1f}" y="{yy}" text-anchor="middle">{st[0]}</text><text x="{xs[i]:.1f}" y="{yy+16}" text-anchor="middle">{st[1]}</text>')
+    s.append('</svg>')
+    return "\n".join(s)
+
+def page(lang, theme):
+    zh = lang == "zh"
+    now = f"""
+<div class="fig" id="now"><h2>{'现在（qwen38-tp-fa8-2c11838c6，llama.cpp 上游 159c651f5 + 8 个补丁）' if zh else 'Now (qwen38-tp-fa8-2c11838c6: llama.cpp upstream 159c651f5 + 8 patches)'}</h2>
+<div class="now">
+<div><b>740–820</b><small>{'prompt tok/s，8K 以内（E410/E412）' if zh else 'prompt tok/s up to 8K (E410 / E412)'}</small></div>
+<div><b>731</b><small>{'32K prompt tok/s（E410，两轮 732 / 731）' if zh else '32K prompt tok/s (E410, two rounds 732 / 731)'}</small></div>
+<div><b>512</b><small>{'128K prompt tok/s（E410；之前 460）' if zh else '128K prompt tok/s (E410; 460 before)'}</small></div>
+<div><b>62 / 44 / 25–28</b><small>{'解码 tok/s，短上下文 / 32K / 128K 深度（E412 / E410，MTP 草稿 n-max 3）' if zh else 'decode tok/s at short context / 32K / 128K depth (E412 / E410, MTP draft n-max 3)'}</small></div>
+</div>
+<div class="note">{'生产 = llama.cpp 上游 159c651f5 + 本仓库 8 个补丁（RDNA2 MMQ tile、mad24、Q8_K 式激活、VOP3P 链头、int8 QK FA tile 内核，env GGML_FATTN_KQ8=1），Qwen3.8-27B UD-Q5_K_XL，-sm tensor，q8_0 KV，196K 上下文。KLD 对 bf16 0.003704，top-1 97.29%。' if zh else 'Production = llama.cpp upstream 159c651f5 + the 8 patches in this repo (RDNA2 MMQ tiles, mad24, Q8_K-style activations, VOP3P chain heads, int8 QK FA tile kernel with GGML_FATTN_KQ8=1), Qwen3.8-27B UD-Q5_K_XL, -sm tensor, q8_0 KV, 196K context. KLD vs bf16 0.003704, top-1 97.29%.'}</div></div>"""
+    leg = [("--c1", "prompt 2K" + ("（8K 在 1% 以内；前两步 2.5K）" if zh else " (8K within 1%; 2.5K in the first two steps)")),
+           ("--c3", "prompt 32K" + ("（前两步 30K）" if zh else " (30K in the first two steps)")),
+           ("--c5", "prompt 128K"), ("--c4", ("解码，短上下文（右轴）" if zh else "decode, short context (right axis)"))]
+    speed = f"""
+<div class="fig" id="speed"><div class="legend">{''.join(f'<span style="--dot:var({c})">{t}</span>' for c,t in leg)}</div>
+<div class="panel">{speed_svg(lang)}</div>
+<div class="note">{'各生产状态的 prompt tok/s（左轴）与短上下文解码（右轴）。前两步是服务端计时（2.5K / 9.8K / 30K），之后是 E379 协议（2K / 8K / 32K 冷启动）；128K 从 10-08 起测；解码只在 10-08/10-09 用同一负载测过（E412），之前各步实测"不变"但没有同口径的数。' if zh else 'Prompt tok/s per production state (left axis) and short-context decode (right axis). The first two steps are server-side timings (2.5K / 9.8K / 30K prompts), the rest the E379 protocol (2K / 8K / 32K, cold starts); 128K measured from 10-08; decode was measured with one load only on 10-08/10-09 (E412) — earlier steps measured it as unchanged but not under the same protocol.'}</div></div>"""
+    bars = [
+        (("MMVQ，4 列验证批读 64 层权重" if zh else "MMVQ, 4-column verify batch over the 64 layers"), ("每卡约 9.3 GB；417 GB/s = 峰值带宽 81%" if zh else "~9.3 GB per card; 417 GB/s = 81% of peak bandwidth"), 47.0, "--c3"),
+        (("发射间隙" if zh else "Launch gaps"), ("每步约 2,500 个内核 × 3–4 µs；关掉 HIP 图只慢 1.5–2%" if zh else "~2,500 kernels per step × 3–4 µs; disabling HIP graphs costs only 1.5–2%"), 23.0, "--c1"),
+        (("lm_head" ), ("1.35 GB q8_0，按 K 维两卡各半；3 次草稿 + 1 次验证，每次都在峰值带宽" if zh else "1.35 GB q8_0 split by K across the cards; 3 draft passes + 1 verify, each at peak bandwidth"), 10.6, "--c2"),
+        (("RCCL allreduce"), ("约 138 次 × 30 µs，每次 80 KB；PCIe x8 经主机的延迟" if zh else "~138 × 30 µs, 80 KB each; PCIe x8 latency through the host"), 8.0, "--c4"),
+        (("量化、RMSNorm、拷贝、GDN、FA" if zh else "quantize, RMSNorm, copies, GDN, FA"), ("548 次 1.3 µs 的量化内核等零碎" if zh else "548 quantize kernels of 1.3 µs and other small ones"), 11.4, "--c5"),
+    ]
+    pie = f"""
+<div class="fig" id="decode"><h2>{'短上下文一个解码步的时间去向（E411：每卡每步约 51 ms，出 3.2 个 token）' if zh else 'Where a short-context decode step goes (E411: per card, ~51 ms per step, 3.2 tokens)'}</h2>
+<div class="panel"><div class="bars">{''.join(f'<div class="bar" style="--fc:var({c})"><div class="lab">{l}<small>{sub}</small></div><div class="tr"><div class="fl" style="width:{v/47*100:.1f}%"></div></div><div class="v">{v:g}%</div></div>' for l,sub,v,c in bars)}</div></div>
+<div class="note">{'rocprofv3 内核追踪，生产配置（MTP 草稿 n-max 3），904 token prompt 后生成 300 token；追踪工具本身拖慢 12%，占比按解码阶段的 GPU 内核时间与墙钟算。没有一块既大又便宜：MMVQ 已到带宽墙，间隙要靠减少内核数，lm_head 草稿要动主模型量化，allreduce 是 PCIe 延迟。' if zh else 'rocprofv3 kernel trace, production config (MTP draft n-max 3), 300 tokens generated after a 904-token prompt; the tracer itself costs 12%, shares are GPU kernel time within the decode phase against wall time. No block is both large and cheap: MMVQ is at the bandwidth wall, the gaps need fewer kernels, the draft lm_head passes would need a smaller output.weight quant, the allreduce is PCIe latency.'}</div></div>"""
+    return f"""<!doctype html><html lang="{lang}" data-theme="{theme}"><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>{CSS}</style></head><body>{now}{speed}{pie}</body></html>"""
+
+async def main():
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        b = await p.chromium.launch()
+        ctx = await b.new_context(viewport={"width": 1100, "height": 900}, device_scale_factor=2)
+        pg = await ctx.new_page()
+        for lang in ("en", "zh"):
+            for theme in ("light", "dark"):
+                path = os.path.join(HERE, f"{lang}-{theme}.html")
+                open(path, "w").write(page(lang, theme))
+                await pg.goto("file://" + path, wait_until="networkidle")
+                await pg.evaluate("document.fonts.ready")
+                await pg.wait_for_timeout(300)
+                for fig in ("now", "speed", "decode"):
+                    el = await pg.query_selector(f"#{fig}")
+                    await el.screenshot(path=os.path.join(OUT, f"q38-{fig}-{lang}-{theme}.png"))
+                    print("wrote", f"q38-{fig}-{lang}-{theme}.png")
+        await b.close()
+asyncio.run(main())

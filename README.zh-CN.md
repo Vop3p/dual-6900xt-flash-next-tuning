@@ -114,7 +114,17 @@ AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，
 
 同样两张卡还用 llama.cpp 跑稠密的 Qwen3.8-27B：`-sm tensor`（RCCL allreduce 走两条 x8 经主机）、q8_0 KV、196K 上下文、MTP 草稿（`--spec-draft-n-max 3`）、3 个槽。全注意力模型，Strata 那套专家缓存 / KV 流式都用不上；上面的 llama.cpp 补丁就是在它身上做的，补丁 8 只为它而存在。它不在交互式时间线页面里。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/q38-now-zh-dark.png">
+  <img alt="27B 当前生产状态与速度" src="docs/q38-now-zh-light.png" width="100%">
+</picture>
+
 **现状（10-09 15:10）**：生产二进制 = 上游 `159c651f5` + 补丁 1–8，env `GGML_FATTN_KQ8=1`。prompt 8K 以内 740–820 tok/s，32K 731，128K 512；解码短上下文 62 tok/s（MTP：每步约 51 ms 出 3.2 个 token），32K 深度 44，128K 25–28。KLD 对 bf16 0.003704，top-1 一致率 97.29%（同一量化用原版内核：0.003941 / 97.32%）。针 32K 8/8、128K 4/4。196K 上下文每卡显存 15.8 GB。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/q38-speed-zh-dark.png">
+  <img alt="27B 各生产状态的 prompt 与解码速度，09-26 到 10-09" src="docs/q38-speed-zh-light.png" width="100%">
+</picture>
 
 | 日期 | 这一步 | 实测效果 |
 | --- | --- | --- |
@@ -131,6 +141,12 @@ AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，
 | 10-09 | E412 新旧二进制短上下文对照 | 解码两边都 62 ±1%，904 token prompt 持平——补丁 8 不碰解码 |
 
 **短上下文一个解码步的时间去向（E411，每卡每步约 51 ms，3.2 个 token）：**
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/q38-decode-zh-dark.png">
+  <img alt="27B 短上下文一个解码步的分解：MMVQ 47%、发射间隙 23%、lm_head 10.6%、RCCL 8%、其余 11.4%" src="docs/q38-decode-zh-light.png" width="100%">
+</picture>
+
 
 | 块 | 占比 | 离硬件上限 |
 | --- | --- | --- |
