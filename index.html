@@ -79,12 +79,12 @@ code{font-family:var(--f-data);font-size:.92em}
 </header>
 
 <section>
-  <h2>现在（10-08 21:25 起，strata-141-d14ca361）</h2>
+  <h2>现在（10-09 00:16 起，strata-141-d14ca361 + E387 解码配置）</h2>
   <div class="now">
     <div><b>960–980</b><small>4K prompt tok/s</small></div>
     <div><b>1,710</b><small>32K prompt tok/s</small></div>
     <div><b>1,950</b><small>128K prompt tok/s</small></div>
-    <div><b>66–75</b><small>解码 tok/s（每窗 33 ms、2.3 token）；候选 spec 3/0.7 + win 2：73–83（E387）</small></div>
+    <div><b>73–83</b><small>解码 tok/s（4K 73–77 / 32K 80–83；spec 3/0.7 + 两窗流水线，10-09 起；之前 66–75）</small></div>
   </div>
   <p class="foot">生产 = Strata 上游 0.1.41 + 7 个本地补丁（PR #1149 / #1151 / #1167 + rocBLAS 解的本机缓存）+ 自改的 llama.cpp ggml（MMQ 的 q8_0 / iq3_s dot 链头用 VOP3P 编码）。</p>
 </section>
@@ -109,7 +109,7 @@ code{font-family:var(--f-data);font-size:.92em}
 <section>
   <h2>已经到地板的（10-08 后别再提）</h2>
   <ul class="closed">
-    <li><b>解码的配置级旋钮单独调都到头了：</b><code>--kv-resident</code> 缩小（E382，专家槽只 +0.7%）、单开 <code>--pipeline-windows 2</code>（E384，+1–6%）、<code>--spec</code> × <code>--spec-min-p</code> 16 点网格（E385，pipeline-windows 1 下 4/0.5 是峰值）。<b>但组合有效</b>：spec 3 / min-p 0.7 + pipeline-windows 2 解码 +10–16%（E387，三轮确认，候选）。</li>
+    <li><b>解码的配置级旋钮单独调都到头了：</b><code>--kv-resident</code> 缩小（E382，专家槽只 +0.7%）、单开 <code>--pipeline-windows 2</code>（E384，+1–6%）、<code>--spec</code> × <code>--spec-min-p</code> 16 点网格（E385，pipeline-windows 1 下 4/0.5 是峰值）。<b>但组合有效</b>：spec 3 / min-p 0.7 + pipeline-windows 2 解码 +10–16%（E387，三轮确认，10-09 上生产）。</li>
     <li><b>并发批槽：</b>常驻专家 41% 低于上游门槛 50%，槽里不带 MTP，2 路并发总吞吐不如单路（上游表）。</li>
     <li><b>IQ3_S 的 MMQ 分块 / stream-K</b>（E279/E280）、<code>--prefill</code> chunk 8192 即甜点（E296）、张量并行（E234，+6%）。</li>
     <li><b>上游自己测过对小卡无益：</b>GDN 分块（需 128 SM）、Foresight 交换槽（解码变慢）、STAGE_PIN（IQ3_S 损坏，改回 opt-in）。</li>
@@ -135,7 +135,7 @@ const M=[
   {k:'vision→HIP0\n10-07',p32:1652,p128:1874,d:74.0},
   {k:'q8k ggml\n10-08',p32:1711,p128:1957,d:74.3},
   {k:'0.1.41\n10-08',p32:1710,p128:1950,d:74.2},
-  {k:'spec3/0.7+win2\n10-08 候选',p32:1710,p128:null,d:82.2},
+  {k:'spec3/0.7+win2\n10-09',p32:1710,p128:null,d:82.2},
 ];
 (function(){
   const W=860,H=372,L=56,R=60,T=16,B=84;
@@ -195,7 +195,7 @@ const S=[
  ['10-08','21:25','engine','生产升 0.1.41（strata-141-d14ca361，E383）','跟上上游 151 个提交；7 个补丁 rebase 无冲突',[['12 条输出逐字相同、速度 ±0.5%、0 停转','flat'],['json 加 gpu_order=as_given 保住卡序','flat']]],
  ['10-08','21:27','drop','--pipeline-windows 2（E384）','第二卡验证本窗时第一卡提前算下一窗',[['解码 +1~6%','flat'],['输出跨启动不确定（2/7 同）、4K prompt −1~5%','down']]],
  ['10-08','21:50','drop','--spec × --spec-min-p 16 点网格（E385/E385b）','每窗 33 ms 固定，速度取决于每窗接受数',[['只有 5/0.6 在 32K +2.5%（单轮）','flat'],['其余全负，4/0.5 是峰值','down']]],
- ['10-08','23:42','decode','--spec 3 --spec-min-p 0.7 + --pipeline-windows 2（E387）','E384/E385 各自单变量都否定了，但短草稿几乎全接受（83% vs 68%）时，第二窗的推测才命中——两个旋钮有交互',[['解码 4K +10~16%、32K +8~11%，三轮确认','up'],['prompt 不变；输出跨启动不确定（基线是确定的）；128K 未测；候选，未上生产','flat']]],
+ ['10-08','23:42','decode','--spec 3 --spec-min-p 0.7 + --pipeline-windows 2（E387）','E384/E385 各自单变量都否定了，但短草稿几乎全接受（83% vs 68%）时，第二窗的推测才命中——两个旋钮有交互',[['解码 4K +10~16%、32K +8~11%，三轮确认','up'],['prompt 不变；输出跨启动不确定（基线是确定的）；128K 无编码器配置下 +11%（E388）；10-09 00:16 上生产','flat']]],
  ['10-08','22:50','drop','并发批槽（--batch N，0.1.41 的 batch-groups auto）','两卡流水能不能提总吞吐',[['常驻专家 41% < 门槛 50%；槽里不带 MTP','down'],['单人使用无意义，不测','flat']]],
 ];
 const on=new Set(Object.keys(LANES));
