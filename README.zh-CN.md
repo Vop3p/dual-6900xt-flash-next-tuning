@@ -3,6 +3,11 @@
 [English](README.md) · **交互版时间线：https://xjc10.github.io/dual-6900xt-flash-next-tuning/** （每一步可按思路筛选）
 
 <picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/now-zh-dark.png">
+  <img alt="当前生产状态与速度" src="docs/now-zh-light.png" width="100%">
+</picture>
+
+<picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/speed-chart-dark.png">
   <img alt="Prompt and decode speed, step by step, llama.cpp 10-02 to Strata 0.1.41 10-08" src="docs/speed-chart-light.png" width="100%">
 </picture>

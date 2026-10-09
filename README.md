@@ -3,8 +3,13 @@
 [中文](README.zh-CN.md) · **Interactive timeline: https://xjc10.github.io/dual-6900xt-flash-next-tuning/** (Chinese; every step filterable by line of attack)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/speed-chart-dark.png">
-  <img alt="Prompt and decode speed, step by step, llama.cpp 10-02 to Strata 0.1.41 10-08" src="docs/speed-chart-light.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/now-en-dark.png">
+  <img alt="Production state and speed now" src="docs/now-en-light.png" width="100%">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/speed-chart-en-dark.png">
+  <img alt="Prompt and decode speed, step by step, llama.cpp 10-02 to Strata 0.1.41 10-08" src="docs/speed-chart-en-light.png" width="100%">
 </picture>
 
 *Prompt 32K–37K and 128K tok/s (left axis) and decode tok/s (right axis) at each production state. Points come from different experiments under slightly different conditions; the notes under the chart on the interactive page list them. Hollow points = not measured at that step.*

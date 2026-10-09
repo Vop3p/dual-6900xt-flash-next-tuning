@@ -138,13 +138,13 @@ const M=[
   {k:'spec3/0.7+win2\n10-08 候选',p32:1710,p128:null,d:82.2},
 ];
 (function(){
-  const W=860,H=340,L=56,R=60,T=16,B=52;
+  const W=860,H=372,L=56,R=60,T=16,B=84;
   const svg=el('svg',{viewBox:`0 0 ${W} ${H}`});
   const xs=i=>L+(W-L-R)*i/(M.length-1);
   const yl=v=>T+(H-T-B)*(1-v/2200), yr=v=>T+(H-T-B)*(1-v/90);
   [0,500,1000,1500,2000].forEach(v=>{svg.append(el('line',{x1:L,x2:W-R,y1:yl(v),y2:yl(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-8,y:yl(v)+4,'text-anchor':'end'},v.toLocaleString('en-US')));});
   [0,20,40,60,80].forEach(v=>svg.append(el('text',{x:W-R+8,y:yr(v)+4},String(v))));
-  M.forEach((m,i)=>{m.k.split('\n').forEach((s,j)=>svg.append(el('text',{x:xs(i),y:H-B+18+j*14,'text-anchor':'middle'},s)));});
+  M.forEach((m,i)=>{m.k.split('\n').forEach((s,j)=>svg.append(el('text',{x:xs(i),y:H-B+18+j*14+(i%2)*32,'text-anchor':'middle'},s)));});
   const series=[['p32','var(--l-prompt)',yl],['p128','var(--l-engine)',yl],['d','var(--l-decode)',yr]];
   series.forEach(([key,col,y])=>{
     let last=null;
