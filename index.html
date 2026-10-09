@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Flash-Next 调优时间线</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* layout: a speed chart on top, then one vertical timeline; each step tagged by its line of attack (lane colour) and carrying its measured effect */
+:root{
+  --bg:#f5f6f4; --panel:#ffffff; --ink:#1b2321; --muted:#5d6966; --rule:#d9dedb;
+  --l-engine:#173f4f; --l-prompt:#2f7a8c; --l-decode:#6a5aa8; --l-stable:#b8691c; --l-drop:#9aa6a2;
+  --good:#2f7a4b; --good-soft:#dcefe2; --bad:#a13d2d; --bad-soft:#f4dfda; --flat:#5d6966; --flat-soft:#e8ebe9;
+  --f-display:"Noto Serif SC","Songti SC",serif; --f-body:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif; --f-data:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#121816; --panel:#1a2220; --ink:#e4ebe8; --muted:#9aa8a4; --rule:#2c3633;
+  --l-engine:#a9dbe8; --l-prompt:#5fb3c6; --l-decode:#a99be0; --l-stable:#e09a4f; --l-drop:#6f7c78;
+  --good:#6cc28c; --good-soft:#1e3326; --bad:#e2826f; --bad-soft:#3b221d; --flat:#9aa8a4; --flat-soft:#232c2a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121816; --panel:#1a2220; --ink:#e4ebe8; --muted:#9aa8a4; --rule:#2c3633;
+  --l-engine:#a9dbe8; --l-prompt:#5fb3c6; --l-decode:#a99be0; --l-stable:#e09a4f; --l-drop:#6f7c78;
+  --good:#6cc28c; --good-soft:#1e3326; --bad:#e2826f; --bad-soft:#3b221d; --flat:#9aa8a4; --flat-soft:#232c2a; color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.65}
+.wrap{max-width:980px;margin:0 auto;padding-inline:20px;padding-block:32px 64px;display:grid;gap:36px}
+.eyebrow{font-family:var(--f-data);font-size:12px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}
+h1{font-family:var(--f-display);font-size:clamp(26px,4vw,36px);line-height:1.25;margin:0;text-wrap:balance}
+h2{font-family:var(--f-display);font-size:21px;margin:0}
+p{margin:0;max-width:68ch}
+header,section{display:grid;gap:12px;min-width:0}
+.lede{color:var(--muted)}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:18px;display:grid;gap:12px;min-width:0}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.chart{overflow-x:auto}
+.chart svg{display:block;width:100%;height:auto;min-width:600px}
+.chart text{font-family:var(--f-data);font-size:11px;fill:var(--muted)}
+.now{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.now div{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:10px 12px;display:grid;gap:2px}
+.now b{font-family:var(--f-data);font-size:20px;font-weight:500}
+.now small{color:var(--muted);font-size:12.5px}
+.filters{display:flex;flex-wrap:wrap;gap:8px}
+.filters button{font:inherit;font-size:13px;padding:4px 12px;border-radius:999px;border:1px solid var(--rule);background:var(--panel);color:var(--ink);cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+.filters button[aria-pressed="false"]{opacity:.45}
+.filters button:focus-visible{outline:2px solid var(--l-prompt);outline-offset:2px}
+.tl{display:grid;gap:0;position:relative}
+.day{font-family:var(--f-data);font-size:13px;color:var(--muted);padding:18px 0 8px 0;letter-spacing:.04em}
+.step{display:grid;grid-template-columns:64px 18px minmax(0,1fr);gap:12px;align-items:start}
+.step .t{font-family:var(--f-data);font-size:12.5px;color:var(--muted);text-align:right;padding-top:14px;font-variant-numeric:tabular-nums}
+.rail{position:relative;align-self:stretch}
+.rail::before{content:"";position:absolute;left:8px;top:0;bottom:0;width:2px;background:var(--rule)}
+.rail i{position:absolute;left:3px;top:16px;width:12px;height:12px;border-radius:50%;border:2px solid var(--panel)}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:12px 14px;margin-bottom:10px;display:grid;gap:6px;min-width:0}
+.card.drop{background:transparent;border-style:dashed}
+.card h3{margin:0;font-size:15px;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
+.lane{font-size:11.5px;font-family:var(--f-data);padding:0 7px;border-radius:3px;color:var(--panel)}
+.why{color:var(--muted);font-size:13.5px}
+.res{display:flex;flex-wrap:wrap;gap:6px}
+.pill{font-family:var(--f-data);font-size:12px;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.pill.up{background:var(--good-soft);color:var(--good)}
+.pill.down{background:var(--bad-soft);color:var(--bad)}
+.pill.flat{background:var(--flat-soft);color:var(--flat)}
+.closed{display:grid;gap:6px;font-size:13.5px}
+.closed li{margin:0}
+.foot{font-size:12.5px;color:var(--muted)}
+code{font-family:var(--f-data);font-size:.92em}
+@media (max-width:520px){.step{grid-template-columns:44px 18px minmax(0,1fr)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="eyebrow">AiBox · 2× RX 6900 XT · Qwen3.8-Flash-Next IQ3_S · 09-30 → 10-08</div>
+  <h1>Flash-Next 调优时间线</h1>
+  <p class="lede">同一个模型（IQ3_S）在这台机器上从 llama.cpp 换到 Strata，再一步步叠加改动。每一步写了当时为什么这么做和实测效果；虚线框是试过但没采用的方向。速度一律指双卡 layer split。</p>
+</header>
+
+<section>
+  <h2>现在（10-08 21:25 起，strata-141-d14ca361）</h2>
+  <div class="now">
+    <div><b>960–980</b><small>4K prompt tok/s</small></div>
+    <div><b>1,710</b><small>32K prompt tok/s</small></div>
+    <div><b>1,950</b><small>128K prompt tok/s</small></div>
+    <div><b>66–75</b><small>解码 tok/s（每窗 33 ms、2.3 token）</small></div>
+  </div>
+  <p class="foot">生产 = Strata 上游 0.1.41 + 7 个本地补丁（PR #1149 / #1151 / #1167 + rocBLAS 解的本机缓存）+ 自改的 llama.cpp ggml（MMQ 的 q8_0 / iq3_s dot 链头用 VOP3P 编码）。</p>
+</section>
+
+<section>
+  <h2>速度怎么一步步上来的</h2>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--l-prompt)"></i>读 prompt，32K–37K（tok/s，左轴）</span>
+    <span><i class="dot" style="background:var(--l-engine)"></i>读 prompt，128K（tok/s，左轴）</span>
+    <span><i class="dot" style="background:var(--l-decode)"></i>解码（tok/s，右轴）</span>
+  </div>
+  <div class="panel"><div class="chart" id="speed"></div>
+  <p class="foot">各点来自不同实验，条件不完全相同：llama.cpp 和 132a522 是 37K（E215）；0.1.39 和 238abe8 来自 10-05 社区报告，当时自适应关着；61c59fa 只测了 128K（E300）；341922e 来自 E342；10-07 起的点来自 E362 / E380 / E382 / E383 的 P 臂（生产配置、图片编码器在 HIP0）。空心点表示那一步没测这个指标。</p></div>
+</section>
+
+<section>
+  <h2>每一步</h2>
+  <div class="filters" id="filters" role="group" aria-label="按思路筛选"></div>
+  <div class="tl" id="tl"></div>
+</section>
+
+<section>
+  <h2>已经到地板的（10-08 后别再提）</h2>
+  <ul class="closed">
+    <li><b>解码的配置级旋钮全部试完：</b><code>--kv-resident</code> 缩小（E382，专家槽只 +0.7%）、<code>--pipeline-windows 2</code>（E384，+1–6% 但输出跨启动不确定）、<code>--spec</code> × <code>--spec-min-p</code> 16 点网格（E385，4/0.5 是每窗接受数的峰值）。</li>
+    <li><b>并发批槽：</b>常驻专家 41% 低于上游门槛 50%，槽里不带 MTP，2 路并发总吞吐不如单路（上游表）。</li>
+    <li><b>IQ3_S 的 MMQ 分块 / stream-K</b>（E279/E280）、<code>--prefill</code> chunk 8192 即甜点（E296）、张量并行（E234，+6%）。</li>
+    <li><b>上游自己测过对小卡无益：</b>GDN 分块（需 128 SM）、Foresight 交换槽（解码变慢）、STAGE_PIN（IQ3_S 损坏，改回 opt-in）。</li>
+    <li><b>还有空间的只剩：</b>PCIe 拓扑 x16+x4（大 prompt 约 1.5×，代价是 27B 的张量并行会崩，用户定）；prompt 侧专家 GEMM / GDN / QSA / hc 读各 10–15%，都是内核级工作。</li>
+  </ul>
+</section>
+
+<p class="foot">数据：实验编号（E…）对应作者的实验日志（见本仓库 README）；Strata 上游 bench/results 里的 2026-10-05 / 2026-10-06 社区报告（PR #927 / #1270）。Developed with an AI coding assistant; every number above was measured on 2x RX 6900 XT (gfx1030, PCIe 4.0 x8 each) / Ryzen 5 5600X, ROCm 10.0.</p>
+</div>
+
+<script>
+const NS="http://www.w3.org/2000/svg";
+function el(t,a,txt){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);if(txt!=null)e.textContent=txt;return e;}
+
+// milestones on the chart (production states)
+const M=[
+  {k:'llama.cpp\n10-02',p32:274,p128:null,d:23.7},
+  {k:'Strata 0.1.38\n10-04',p32:722,p128:null,d:54.8},
+  {k:'0.1.39\n10-04',p32:723,p128:821,d:60.6},
+  {k:'238abe8\n10-05',p32:1616,p128:1823,d:59.0},
+  {k:'61c59fa\n10-05',p32:null,p128:1940,d:null},
+  {k:'341922e\n10-06',p32:1685,p128:2003,d:74.7},
+  {k:'4592281+vision→HIP0\n10-07',p32:1652,p128:1874,d:74.0},
+  {k:'q8k ggml\n10-08',p32:1711,p128:1957,d:74.3},
+  {k:'0.1.41\n10-08',p32:1710,p128:1950,d:74.2},
+];
+(function(){
+  const W=860,H=300,L=56,R=56,T=16,B=52;
+  const svg=el('svg',{viewBox:`0 0 ${W} ${H}`});
+  const xs=i=>L+(W-L-R)*i/(M.length-1);
+  const yl=v=>T+(H-T-B)*(1-v/2200), yr=v=>T+(H-T-B)*(1-v/80);
+  [0,500,1000,1500,2000].forEach(v=>{svg.append(el('line',{x1:L,x2:W-R,y1:yl(v),y2:yl(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-8,y:yl(v)+4,'text-anchor':'end'},v.toLocaleString('en-US')));});
+  [0,20,40,60,80].forEach(v=>svg.append(el('text',{x:W-R+8,y:yr(v)+4},String(v))));
+  M.forEach((m,i)=>{m.k.split('\n').forEach((s,j)=>svg.append(el('text',{x:xs(i),y:H-B+18+j*14,'text-anchor':'middle'},s)));});
+  const series=[['p32','var(--l-prompt)',yl],['p128','var(--l-engine)',yl],['d','var(--l-decode)',yr]];
+  series.forEach(([key,col,y])=>{
+    let last=null;
+    M.forEach((m,i)=>{const v=m[key]; if(v==null) return;
+      if(last){const gap=i-last.i>1; svg.append(el('line',{x1:xs(last.i),y1:y(last.v),x2:xs(i),y2:y(v),stroke:col,'stroke-width':2,'stroke-dasharray':gap?'4 4':'none'}));}
+      last={i,v};});
+    M.forEach((m,i)=>{const v=m[key]; if(v==null) return;
+      svg.append(el('circle',{cx:xs(i),cy:y(v),r:4.5,fill:col,stroke:'var(--panel)','stroke-width':1.5}));
+      svg.append(el('text',{x:xs(i)+7,y:y(v)-7,style:`fill:${col}`},v>=1000?v.toLocaleString('en-US'):String(v)));});
+  });
+  svg.append(el('text',{x:L,y:10},'tok/s'));
+  svg.append(el('text',{x:W-R+8,y:10},'解码'));
+  document.getElementById('speed').append(svg);
+})();
+
+const LANES={engine:['引擎选择','var(--l-engine)'],prompt:['读 prompt','var(--l-prompt)'],decode:['解码','var(--l-decode)'],stable:['稳定性 #884','var(--l-stable)'],drop:['试过没采用','var(--l-drop)']};
+// [day, time, lane, title, why, [[text,dir]...]]
+const S=[
+ ['09-30','16:44','engine','llama.cpp 换 IQ3_S + 112 槽专家缓存','同样的显存装下更多专家，缓存命中更高',[['20K：pp 274、tg 22.7','up'],['上线时 UD 版 224 / 17.0','flat']]],
+ ['10-02','02:06','decode','llama.cpp 官方 MTP 草稿头 + 137 槽','MTP 草稿 + 更多缓存槽',[['快 10–18%','up']]],
+ ['10-04','01:05','engine','对比 Strata 与 llama.cpp（E215）','同一个 IQ3_S，看 Strata 的专家调度在双卡上能不能更快',[['37K prompt 274 → 722（2.6×）','up'],['解码 23.7 → 54.8（2.3×）','up']]],
+ ['10-04','02:30','engine','生产切到 Strata（132a522）','E215 两项都 2 倍以上',[['开 strata-split / strata-helper 两个槽','flat']]],
+ ['10-04','01:40','drop','副卡参与读 prompt（peer 模式）','想让第二张卡也帮着算专家',[['默认会卡死；绕过后比单卡还慢','down']]],
+ ['10-04','17:00','engine','升到 0.1.39（6add1a7）','上游新版',[['32K 723、128K 821，解码 59–61','flat']]],
+ ['10-04','19:40','decode','helper 槽 --pcie-frac 0（E241）','DECODE_TIMING 拆出来：PCIe 份额把主卡拖慢一倍',[['helper 解码 39–41 → 60–68','up']]],
+ ['10-04','21:00','stable','关自适应（--adapt-every 100000）','先止住 #884 卡死',[['不再卡','up'],['解码代价 −3~11%','down']]],
+ ['10-05','04:22','drop','专家改走解压 + 稠密 GEMM（MMQ 关）','想看 int8 MMQ 是不是瓶颈',[['−34~−40%，MMQ 保留','down']]],
+ ['10-05','14:52','drop','spec 3 / min-p 0.7（别人的 +9.5%）','别的卡上更快',[['本机持平偏慢 2–3%','flat']]],
+ ['10-05','15:32','prompt','238abe8：F16 prompt + attn 内核 + rocBLAS 表（#835 #849 #981）','gfx1030 没有矩阵核心，rocBLAS 默认选的 kernel 慢 7 倍',[['32K 723 → 1,616（2.2×）','up'],['128K 821 → 1,823','up'],['短 prompt GPU −10~14%','up']]],
+ ['10-05','18:45','prompt','IO_THREADS=128 + PLE 表锁在内存','首块等 PLE 行 600 → 306 ms',[['8K prompt +3.6%','up']]],
+ ['10-04','15:10','drop','张量并行（估算 +35~50%）','把投影切到两张卡',[['实测只能 +6~8%，不做','flat']]],
+ ['10-05','20:25','prompt','61c59fa：QSA select 走 rocBLAS SGEMM（#1007）','select 是唯一随上下文增长的项',[['128K 1,818 → 1,940（+6.7%）','up'],['50K 以下无收益','flat']]],
+ ['10-06','06:26','stable','找到 #884 的另一半：GFXOFF','关掉 GPU 省电后再测',[['卡死 7/8 → 0/30','up']]],
+ ['10-06','07:04','stable','GFXOFF 租约 + 重开自适应（E334）','用关省电代替关自适应，拿回解码',[['自适应回来，解码恢复','up']]],
+ ['10-06','13:52','engine','0.1.40.1 对比 0.1.39（E340）','同一下午，GFXOFF 真开',[['0.1.39 栈 7/8 卡；0.1.40.1 0/8','up']]],
+ ['10-06','18:04','engine','生产换 341922e：0.1.40.1 + 我们的 PR + SH_STREAM + F16','新版不再卡、分叉在本机更快',[['32K 1,685、128K 2,003','up'],['解码 59 → 70–75','up']]],
+ ['10-06','19:10','stable','kernel-copy 代替 GFXOFF 租约（E344）','128K split 在 GFXOFF 默认下仍停转',[['停转 3/3 → 0/3','up'],['速度不变，省待机功耗','flat']]],
+ ['10-06','20:05','drop','上游 4 个提速 PR（#1120 #1125 #1181 #1240）','逐个 A/B，各 2 对冷启动',[['都没有可确认的收益','flat']]],
+ ['10-06','20:20','decode','75d5a78：加 AVX2 量化（#1125）','结果逐字节相同，开着没代价',[['速度不变','flat']]],
+ ['10-06','21:24','engine','只留 split：删 helper 和旧槽','helper 读 prompt 只有单卡速度',[['llama-swap 剩 5 个槽','flat']]],
+ ['10-06','22:20','engine','split 两槽开图片（自编 HIP strata-vision）','用户要图片；官方 AMD 只给 CPU 编码器',[['主卡缓存 −11%，32K prompt −3.6%','down'],['640×480 图 3.2 s','flat']]],
+ ['10-07','16:54','prompt','4592281：rocBLAS 解存本机缓存（E357）','select 的解每次启动现测，两卡/两次会挑不同解，文本偶尔变',[['速度持平，解不再随启动变','flat']]],
+ ['10-07','21:00','prompt','#1151 改为 SIMT 打分核（上游 65ce329 移植，E358–E360）','FP32 分块核比 rocBLAS SGEMM 快，不要表、不要实测、逐字节一致',[['128K prompt +7.4%','up'],['32K +0.8%','flat']]],
+ ['10-07','22:10','prompt','图片编码器挪到 HIP0（E362）','主卡被编码器占显存，另一张卡本来在等',[['主卡缓存 5,256 → 6,123 槽','up'],['32K prompt +2.8~3.8%','up']]],
+ ['10-08','01:00','drop','strata-ud-q4 槽：UD-Q4_K_XL 在 HIP 分层跑通（E364–E366）','和 IQ3_S 比质量（GSQ 用 xhigh 推理校准）',[['解码 −38%、32K prompt −3%','down'],['只用于比质量','flat']]],
+ ['10-08','19:25','prompt','q8k-4592281：ggml 换成 llama-q2k（E380）','Strata 的专家 prompt 矩阵乘就是 llama.cpp 的 MMQ；q8_0/iq3_s 的 dot 链头改 VOP3P 省掉清零 mov',[['iq3_s 内核 +2.6%','up'],['32K prompt +1.4~1.5%，12 条输出逐字相同','up']]],
+ ['10-08','20:30','drop','--kv-resident 32K → 16K（E382）','想把 VRAM 让给专家缓存',[['专家槽只 +0.7%：Flash-Next 的 KV 常驻才一百多 MB','flat'],['32K 解码 −3%','down']]],
+ ['10-08','21:25','engine','生产升 0.1.41（strata-141-d14ca361，E383）','跟上上游 151 个提交；7 个补丁 rebase 无冲突',[['12 条输出逐字相同、速度 ±0.5%、0 停转','flat'],['json 加 gpu_order=as_given 保住卡序','flat']]],
+ ['10-08','21:27','drop','--pipeline-windows 2（E384）','第二卡验证本窗时第一卡提前算下一窗',[['解码 +1~6%','flat'],['输出跨启动不确定（2/7 同）、4K prompt −1~5%','down']]],
+ ['10-08','21:50','drop','--spec × --spec-min-p 16 点网格（E385/E385b）','每窗 33 ms 固定，速度取决于每窗接受数',[['只有 5/0.6 在 32K +2.5%（单轮）','flat'],['其余全负，4/0.5 是峰值','down']]],
+ ['10-08','22:50','drop','并发批槽（--batch N，0.1.41 的 batch-groups auto）','两卡流水能不能提总吞吐',[['常驻专家 41% < 门槛 50%；槽里不带 MTP','down'],['单人使用无意义，不测','flat']]],
+];
+const on=new Set(Object.keys(LANES));
+const F=document.getElementById('filters');
+Object.entries(LANES).forEach(([k,[name,col]])=>{const b=document.createElement('button');b.type='button';b.id='f-'+k;b.setAttribute('aria-pressed','true');
+  b.innerHTML=`<i class="dot" style="background:${col}"></i>${name}`;b.onclick=()=>{on.has(k)?on.delete(k):on.add(k);b.setAttribute('aria-pressed',on.has(k));render();};F.append(b);});
+function render(){
+  const tl=document.getElementById('tl');tl.innerHTML='';let day=null;
+  S.filter(s=>on.has(s[2])).sort((a,b)=>(a[0]+a[1]).localeCompare(b[0]+b[1])).forEach(([d,t,lane,title,why,res])=>{
+    if(d!==day){day=d;const h=document.createElement('div');h.className='day';h.textContent=d;tl.append(h);}
+    const [ln,col]=LANES[lane];
+    const row=document.createElement('div');row.className='step';
+    row.innerHTML=`<div class="t">${t}</div><div class="rail"><i style="background:${col}"></i></div>`+
+      `<div class="card${lane==='drop'?' drop':''}"><h3><span class="lane" style="background:${col}">${ln}</span>${title}</h3>`+
+      `<div class="why">${why}</div><div class="res">${res.map(([x,dir])=>`<span class="pill ${dir}">${x}</span>`).join('')}</div></div>`;
+    tl.append(row);});
+}
+render();
+</script>
+</body>
+</html>
