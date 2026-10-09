@@ -66,6 +66,7 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 | 10-08 19:25 | production strata-q8k-4592281: ggml from the modified llama.cpp (MMQ q8_0 / iq3_s dot-chain heads in VOP3P, E378) | iq3_s kernel +2.6% → 32K prompt +1.4–1.5%, outputs byte-identical |
 | 10-08 20:30 | E382 `--kv-resident` 32K → 16K | expert slots only +0.7%, 32K decode −3%, dropped |
 | 10-08 21:25 | **production strata-141-d14ca361**: upstream 0.1.41 + the 7 patches rebased (clean) | 12 outputs byte-identical, speed ±0.5%, 0 stalls; json gets `gpu_order: as_given` |
+| 10-09 04:47 | E391–E394: four outside leads, all negative | `--prefill auto:16384` (#1640) 32K −14%; a 4K prompt as two 2,048 chunks (#1441's idea) −9%; #1123's FP32 SGEMM never runs with the FP16 route on, +66/+73% with it off (already measured 10-06 on its predecessor, cited in the PR); phase timing: FP16 twice as fast on hc read and qsa proj, no route merge |
 | 10-09 04:03 | E388a: 0.1.41 one-card / helper arms (completes the report) | one card PRs 976/1,174/1,147, decode 49–51; helper PRs 986/1,173/1,147, decode 72–75; stock +3–6% over 0.1.40.1, switches +5–13%, PRs +1–2%; zero stalls |
 | 10-09 00:16 | **E387 config in production** (`strata-split` / `-256k`: `--spec 3 --spec-min-p 0.7 --pipeline-windows 2`, backups `*.bak-2026-10-09-before-e387`) | one real 7K request through llama-swap: confirm line present, split 0–26/27–47, prompt 1,019, decode 73.4, 92% drafts accepted |
 | 10-09 00:13 | E388 0.1.41 community report (5 split arms, no vision encoder) | stock 0.1.41 vs 0.1.40.1 stock: prompt +4–6% (464/767/869); the two switches +5/+12/+12% (832/1,619/1,823); PRs unchanged (968/1,714/2,029); kernel-copy free, stock 128K no stall; the E387 decode config +19/+20/+11% (77/82/76) |
@@ -88,6 +89,7 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 - Treated the `amdgpu_gfxoff` knob as a level when it is a refcount; every "default on" arm of E335–E338 was invalid (10-06).
 - Misread the split timing lines: the "whole call" card's `embed+steps` includes waiting for the other card (E361).
 - Assumed the resident KV window was a large share of VRAM and ran E382 before doing the arithmetic (+40 slots).
+- Read an upstream PR's whole body and grep your own log for it and its predecessor before measuring it: three rounds on #1123 before noticing we had measured its predecessor #1006 on 10-06 and the PR cites our numbers (E392).
 - Declared `--pipeline-windows 2` and the spec grid closed after one single-variable sweep each (E384/E385); the two knobs interact and the combination is +10–16% (E387).
 - Expected +10–30% from `--pipeline-windows`; measured +1–6% with non-deterministic output — the estimate ignored that the guess rate is bounded by 2.3 accepted tokens per window.
 - Upgraded to 0.1.39 without checking the old build's local patches one by one; helper decode fell to 39 tok/s (10-04 19:40).
