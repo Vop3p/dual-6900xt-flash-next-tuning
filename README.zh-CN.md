@@ -1,5 +1,7 @@
 # dual-6900xt-flash-next-tuning（中文）
 
+<img src="docs/cover-zh.webp" alt="Strata 社区榜 AMD 双卡第一：2× RX 6900 XT，128K 2,041 tok/s，解码 82" width="100%">
+
 [English](README.md) · **交互版时间线：https://vop3p.github.io/dual-6900xt-flash-next-tuning/** （每一步可按思路筛选）
 
 <picture>
