@@ -1,0 +1,15 @@
+#!/bin/bash
+# srv.sh <tag> <model>: 宿主 prod 构建,生产全参数(np3 kvu MTP n3 q8 b1024 ub512 c196608 cache-ram 32768),端口 9902
+TAG=$1; M=$2; L=~/notes/bench/e407/srv-$TAG.log; rm -f $L
+for i in $(seq 1 30); do [ $(cat /sys/class/drm/card0/device/mem_info_vram_used) -lt 1073741824 ] && [ $(cat /sys/class/drm/card1/device/mem_info_vram_used) -lt 1073741824 ] && break; sleep 2; done
+{ ./guard.sh >/dev/null && curl -s 127.0.0.1:9292/running | grep -q "\"running\":\[\]"; } || { echo GUARD; exit 1; }
+echo "[$TAG] $M sha=$(sha256sum $M | cut -c1-12) $(date +%T)"
+LD_LIBRARY_PATH=${BIN:-~/llama-blastune/build/bin}:/opt/rocm/lib NCCL_P2P_DISABLE=1 ${BIN:-~/llama-blastune/build/bin}/llama-server -m $M \
+  --chat-template-file ~/models/qwen-chat-template.jinja -ngl 99 -fa on -sm tensor -np 3 -kvu \
+  --spec-type draft-mtp --spec-draft-n-max 3 --cache-type-k q8_0 --cache-type-v q8_0 -b 1024 -ub 512 -c 196608 --jinja \
+  --temp 1.0 --top-p 0.95 --top-k 20 --reasoning-format deepseek --cache-ram 32768 \
+  $EXTRA --host 127.0.0.1 --port 9902 > $L 2>&1 &
+echo $! > srv.pid
+for i in $(seq 1 150); do curl -s -m 2 http://127.0.0.1:9902/health | grep -q ok && break; kill -0 $(cat srv.pid) 2>/dev/null || break; sleep 2; done
+curl -s -m 2 http://127.0.0.1:9902/health | grep -q ok || { echo "[$TAG] FAILED"; tail -5 $L | cut -c1-200; kill $(cat srv.pid) 2>/dev/null; exit 1; }
+echo "[$TAG] up $(date +%T) vram $(( $(cat /sys/class/drm/card0/device/mem_info_vram_used)>>20 ))/$(( $(cat /sys/class/drm/card1/device/mem_info_vram_used)>>20 )) MiB | 加载路径: $(grep -oE "loading model '[^']+'" $L | head -1)"

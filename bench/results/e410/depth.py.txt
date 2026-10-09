@@ -1,0 +1,38 @@
+import json, urllib.request, sys, time, statistics, datetime, os
+# depth.py <tag> <depths K list>: 生产 qwen38-tp 经 9292;真实文本;每深度 冷缓存问 4 针 + 同前缀 3 次 256 token 总结
+B="http://127.0.0.1:9902"; tag=sys.argv[1]; depths=[int(x)*1024 for x in sys.argv[2].split(",")]
+STOP=os.environ.get("STOP","0805")
+def post(p,b,to=7200):
+    return json.load(urllib.request.urlopen(urllib.request.Request(B+p,data=json.dumps(b).encode(),headers={"Content-Type":"application/json"}),timeout=to))
+tf="~/notes/bench/e152/speed.tokens.q38.json"
+if not os.path.exists(tf):
+    json.dump(post("/tokenize",{"content":open("~/notes/bench/e150/corpus-speed.txt").read()})["tokens"],open(tf,"w"))
+toks=json.load(open(tf))
+needles=[(0.20,"【备忘】青铜钥匙的保险柜密码是 7391。"),(0.45,"【备忘】第二个会议室的门牌号是 G-4826。"),
+         (0.70,"【备忘】紫色长颈鹿项目的负责人叫柯文远。"),(0.88,"【备忘】最后一批货物的集装箱编号是 KX-5530。")]
+Q="\n\n上面的长文本中夹有 4 条以【备忘】开头的句子。请逐条列出：保险柜密码、会议室门牌号、紫色长颈鹿项目负责人、集装箱编号。只输出这四项。"
+S="\n\n请用中文写一段约 300 字的总结，概括上面文本的主要内容。"
+out=open(f"~/notes/bench/e407/depth-{tag}.jsonl","a")
+for N in depths:
+    if datetime.datetime.now().strftime("%H%M")>=STOP: print("STOP 时间到,不再开始新深度",flush=True); break
+    O=(N*7919)%(len(toks)-N-10)   # 每深度不同偏移
+    parts=[]; prev=0
+    for f,s in needles:
+        cut=int(N*f); parts.append(post("/detokenize",{"tokens":toks[O+prev:O+cut]})["content"]); parts.append("\n"+s+"\n"); prev=cut
+    parts.append(post("/detokenize",{"tokens":toks[O+prev:O+N]})["content"]); hay="".join(parts)
+    t0=time.time()
+    r=post("/v1/chat/completions",{"messages":[{"role":"user","content":hay+Q}],"max_tokens":200,"cache_prompt":True,
+        "chat_template_kwargs":{"enable_thinking":False},"temperature":0})
+    c=r["choices"][0]["message"]["content"]; t=r["timings"]
+    hit=[k in c for k in ("7391","G-4826","柯文远","KX-5530")]
+    rec={"N":N,"prompt_n":t["prompt_n"],"prefill_tps":t["prompt_per_second"],"recall":sum(hit),"hit":hit,"answer":c.strip()[:200]}
+    print(f"{tag} depth {N//1024}K prompt_n={t['prompt_n']} prefill {t['prompt_per_second']:.1f} t/s wall {time.time()-t0:.0f}s recall {sum(hit)}/4 {hit}",flush=True)
+    tg=[];acc=[];pn=[]
+    for i in range(3):
+        r=post("/v1/chat/completions",{"messages":[{"role":"user","content":hay+S}],"max_tokens":256,"cache_prompt":True,"ignore_eos":True,
+            "chat_template_kwargs":{"enable_thinking":False},"temperature":1,"top_k":20,"top_p":0.95,"min_p":0})
+        t=r["timings"]; tg.append(t["predicted_per_second"]); pn.append(t["prompt_n"])
+        acc.append(t.get("draft_n_accepted",0)/max(1,t.get("draft_n",1)))
+    rec.update({"decode":tg,"decode_med":statistics.median(tg),"accept":acc,"reuse_prompt_n":pn})
+    print(f"{tag} depth {N//1024}K decode {' '.join(f'{x:.2f}' for x in tg)} med {statistics.median(tg):.2f} | accept {' '.join(f'{a:.2f}' for a in acc)} | 复用后 prompt_n {pn}",flush=True)
+    out.write(json.dumps(rec,ensure_ascii=False)+"\n"); out.flush()

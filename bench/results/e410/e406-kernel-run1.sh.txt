@@ -1,0 +1,16 @@
+#!/bin/bash
+cd ~/llama-q2k || exit 1
+true
+export LD_LIBRARY_PATH=~/llama-q2k/build-iq2s/bin:/opt/rocm/lib HIP_VISIBLE_DEVICES=1
+T=build-iq2s/bin/test-backend-ops
+echo "=== correctness, KQ8 on (D=256 q8_0 cases)"
+GGML_FATTN_KQ8=1 $T test -b ROCm0 -o FLASH_ATTN_EXT -p "hsk=256,hsv=256,nh=4,nr23=\[6,1\]" 2>&1 | grep -E "FLASH_ATTN_EXT|tests passed|FAIL" | grep -E "q8_0|passed|FAIL" | sed -E 's/\x1b\[[0-9;]*m//g' | cut -c1-120 | sed -E 's/,sinks=0,max_bias=0.000000,logit_softcap=0.000000,prec=f32//'
+echo "=== correctness, KQ8 off (control)"
+$T test -b ROCm0 -o FLASH_ATTN_EXT -p "hsk=256,hsv=256,nh=4,nr23=\[6,1\]" 2>&1 | grep -E "tests passed|FAIL" | sed -E 's/\x1b\[[0-9;]*m//g' | head -3
+echo "=== perf (us/run, TFLOPS): off vs on, two rounds"
+for r in 1 2; do for mode in off on; do
+  if [ $mode = on ]; then export GGML_FATTN_KQ8=1; else unset GGML_FATTN_KQ8; fi
+  $T perf -b ROCm0 -o FLASH_ATTN_EXT -p "nr23=\[6,1\],kv=16384,nb=512" 2>&1 | grep -E "FLASH_ATTN_EXT.*FLOPS" | sed -E 's/\x1b\[[0-9;]*m//g' | sed -E "s/^.*kv=([0-9]+),nb=512.*type_K=([a-z0-9_]+).*- +([0-9.]+) us\/run - .*- +([0-9.]+) TFLOPS.*/[r$r $mode] kv=\1 \2 \3 us \4 TFLOPS/"
+  $T perf -b ROCm0 -o FLASH_ATTN_EXT -p "nr23=\[6,1\],kv=65536,nb=512" 2>&1 | grep -E "FLASH_ATTN_EXT.*FLOPS" | sed -E 's/\x1b\[[0-9;]*m//g' | sed -E "s/^.*kv=([0-9]+),nb=512.*type_K=([a-z0-9_]+).*- +([0-9.]+) us\/run - .*- +([0-9.]+) TFLOPS.*/[r$r $mode] kv=\1 \2 \3 us \4 TFLOPS/"
+done; done
+echo "E406 RUN1 DONE $(date +%T)"

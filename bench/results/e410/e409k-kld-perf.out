@@ -1,0 +1,17 @@
+tile head: #define FATTN_KQ8_HALVES_SAME 1|#define FATTN_KQ8_SINGLE_FOLD 1|#include "common.cuh"|
+common head: #define FATTN_KQ8_NO_SPLITKV 1|#pragma once|
+BUILD_EXIT 0
+[final2] exit 0
+[final2] ggml-cuda: fattn tile int8 QK path engaged (GGML_FATTN_KQ8=1, D=256, q8_0 K, halves share one scale)
+[final2] chunk             PPL               ln(PPL(Q)/PPL(base))          KL Divergence              Δp RMS            Same top p
+[final2] Mean    KLD:   0.003704 ±   0.000081
+[final2] Maximum KLD:   0.558013
+[final2] 99.9%   KLD:   0.135783
+[final2] Median  KLD:   0.001585
+[final2] Same top p: 97.286 ± 0.127 %
+[final2 perf r1] kv=16384 q8_0 9813.64 us 21.01 TFLOPS
+[final2 perf r1] kv=65536 q8_0 40734.36 us 20.24 TFLOPS
+[final2 perf r2] kv=16384 q8_0 9828.49 us 20.98 TFLOPS
+[final2 perf r2] kv=65536 q8_0 40714.44 us 20.25 TFLOPS
+[final2]   8/8 tests passed
+E409k DONE 14:33:07  (defines left in place)

@@ -1,0 +1,4 @@
+#!/bin/bash
+p=$(ss -ltnp 'sport = :9902' | grep -oE 'pid=[0-9]+' | cut -d= -f2 | head -1)
+[ -n "$p" ] && kill $p && while kill -0 $p 2>/dev/null; do sleep 1; done
+sleep 3; echo "stopped ${p:-none}"

@@ -1,0 +1,19 @@
+#!/bin/bash
+# E407: int8 QK (fa-int8 425acc768) on qwen38-tp: KLD on/off, then P/F alternating end-to-end (E379 method) + depth 128K
+true
+true
+cd ~/notes/bench/e407
+Q5=~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf
+F=~/llama-q2k/build-iq2s/bin; P=~/prod-bin/qwen38-tp-q8k-fb5d45967
+echo "F binary $(sha256sum $F/llama-server | cut -c1-12) $(git -C ~/llama-q2k log -1 --format=%h)"
+
+
+meas(){ python3 sweep.py $1 2048,8192; python3 short.py $1; STOP=2400 python3 depth.py $1 32; }
+vram(){ echo "  $1 vram after: $(( $(cat /sys/class/drm/card0/device/mem_info_vram_used)>>20 ))/$(( $(cat /sys/class/drm/card1/device/mem_info_vram_used)>>20 )) MiB"; }
+arm(){ T=$1; B=$2; if [ "$3" = on ]; then export GGML_FATTN_KQ8=1; else unset GGML_FATTN_KQ8; fi; BIN=$B ./srv.sh $T $Q5 && { meas $T; vram $T; }; ./stop.sh; }
+arm P1 $P off; arm F1 $F on; arm P2 $P off; arm F2 $F on
+echo "=== depth 128K, one round each"
+meas128(){ STOP=2400 python3 depth.py $1 128; }
+export GGML_FATTN_KQ8=1; BIN=$F ./srv.sh F128 $Q5 && meas128 F128; ./stop.sh
+unset GGML_FATTN_KQ8;  BIN=$P ./srv.sh P128 $Q5 && meas128 P128; ./stop.sh
+echo "E410 DONE $(date +%T)"

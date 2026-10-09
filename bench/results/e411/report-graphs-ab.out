@@ -1,0 +1,23 @@
+head: 15:53:17 llama-server 6053c18ef808 rocprofv3 /usr/bin/rocprofv3
+[D] GGML_CUDA_DISABLE_GRAPHS=1
+=== [D] 15:53:38 prof=0 extra='--spec-type draft-mtp --spec-draft-n-max 3'
+[D] up 15:53:45 vram 15842 15842 MiB
+req n1: prompt_n=904 gen=300 prompt 741.2 t/s decode 61.62 t/s (4853 ms) draft_n=277 draft_acc=205
+req n2: prompt_n=904 gen=300 prompt 735.6 t/s decode 60.65 t/s (4930 ms) draft_n=280 draft_acc=204
+req n3: prompt_n=904 gen=300 prompt 744.7 t/s decode 60.89 t/s (4911 ms) draft_n=280 draft_acc=204
+[D] stopping pid 666559 15:54:06
+[A2] GGML_CUDA_DISABLE_GRAPHS=unset
+=== [A2] 15:54:16 prof=0 extra='--spec-type draft-mtp --spec-draft-n-max 3'
+[A2] up 15:54:24 vram 15842 15842 MiB
+req n1: prompt_n=904 gen=300 prompt 738.1 t/s decode 62.51 t/s (4783 ms) draft_n=277 draft_acc=205
+req n2: prompt_n=904 gen=300 prompt 736.9 t/s decode 62.02 t/s (4821 ms) draft_n=280 draft_acc=204
+req n3: prompt_n=904 gen=300 prompt 739.2 t/s decode 61.92 t/s (4829 ms) draft_n=280 draft_acc=204
+[A2] stopping pid 666786 15:54:45
+[D2] GGML_CUDA_DISABLE_GRAPHS=1
+=== [D2] 15:54:54 prof=0 extra='--spec-type draft-mtp --spec-draft-n-max 3'
+[D2] up 15:55:01 vram 15842 15842 MiB
+req n1: prompt_n=904 gen=300 prompt 736.9 t/s decode 61.16 t/s (4889 ms) draft_n=277 draft_acc=205
+req n2: prompt_n=904 gen=300 prompt 735.4 t/s decode 60.71 t/s (4925 ms) draft_n=280 draft_acc=204
+req n3: prompt_n=904 gen=300 prompt 738.3 t/s decode 60.70 t/s (4926 ms) draft_n=280 draft_acc=204
+[D2] stopping pid 667004 15:55:22
+E411b DONE 15:55:32

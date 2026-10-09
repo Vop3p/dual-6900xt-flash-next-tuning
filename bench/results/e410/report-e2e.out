@@ -1,0 +1,53 @@
+F binary 6053c18ef808 2c11838c6
+[P1] ~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf sha=8601193d3d57 14:37:01
+[P1] up 14:37:10 vram 15841/15841 MiB | 加载路径: loading model '~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf'
+P1 T= 2048 ms=2503 2503 2499 med=2503 -> 818.2 t/s
+P1 T= 8192 ms=10004 10023 10045 med=10023 -> 817.3 t/s
+P1 散文: 43.28 42.88 44.32 中位 43.28 | accept 0.39 0.38 0.41
+P1 代码: 61.24 64.03 65.75 中位 64.03 | accept 0.71 0.76 0.79
+P1 depth 32K prompt_n=32891 prefill 708.5 t/s wall 47s recall 4/4 [True, True, True, True]
+P1 depth 32K decode 47.48 41.82 44.89 med 44.89 | accept 0.58 0.47 0.53 | 复用后 prompt_n [490, 4, 4]
+  P1 vram after: 16045/16125 MiB
+stopped 641214
+[F1] ~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf sha=8601193d3d57 14:40:23
+[F1] up 14:40:31 vram 15841/15842 MiB | 加载路径: loading model '~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf'
+F1 T= 2048 ms=2515 2515 2512 med=2515 -> 814.2 t/s
+F1 T= 8192 ms=9976 9996 10011 med=9996 -> 819.5 t/s
+F1 散文: 42.98 43.69 47.64 中位 43.69 | accept 0.39 0.40 0.46
+F1 代码: 62.57 63.53 61.07 中位 62.57 | accept 0.74 0.74 0.71
+F1 depth 32K prompt_n=32891 prefill 732.2 t/s wall 46s recall 4/4 [True, True, True, True]
+F1 depth 32K decode 44.27 38.21 46.67 med 44.27 | accept 0.52 0.40 0.56 | 复用后 prompt_n [490, 4, 4]
+  F1 vram after: 16045/16125 MiB
+stopped 642659
+[P2] ~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf sha=8601193d3d57 14:43:42
+[P2] up 14:43:50 vram 15841/15841 MiB | 加载路径: loading model '~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf'
+P2 T= 2048 ms=2526 2525 2522 med=2525 -> 811.1 t/s
+P2 T= 8192 ms=10098 10112 10132 med=10112 -> 810.1 t/s
+P2 散文: 41.25 41.76 43.08 中位 41.76 | accept 0.36 0.36 0.39
+P2 代码: 65.72 56.51 66.75 中位 65.72 | accept 0.80 0.62 0.80
+P2 depth 32K prompt_n=32891 prefill 703.7 t/s wall 48s recall 4/4 [True, True, True, True]
+P2 depth 32K decode 45.26 43.40 44.10 med 44.10 | accept 0.53 0.51 0.52 | 复用后 prompt_n [490, 4, 4]
+  P2 vram after: 16045/16125 MiB
+stopped 643973
+[F2] ~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf sha=8601193d3d57 14:47:03
+[F2] up 14:47:11 vram 15841/15842 MiB | 加载路径: loading model '~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf'
+F2 T= 2048 ms=2514 2514 2513 med=2514 -> 814.6 t/s
+F2 T= 8192 ms=9989 9999 10018 med=9999 -> 819.2 t/s
+F2 散文: 45.64 42.09 44.18 中位 44.18 | accept 0.43 0.37 0.41
+F2 代码: 61.16 61.62 68.88 中位 61.62 | accept 0.71 0.72 0.85
+F2 depth 32K prompt_n=32891 prefill 731.3 t/s wall 46s recall 4/4 [True, True, True, True]
+F2 depth 32K decode 43.69 47.14 44.67 med 44.67 | accept 0.52 0.57 0.53 | 复用后 prompt_n [490, 4, 4]
+  F2 vram after: 16045/16125 MiB
+stopped 645455
+=== depth 128K, one round each
+[F128] ~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf sha=8601193d3d57 14:50:21
+[F128] up 14:50:29 vram 15841/15842 MiB | 加载路径: loading model '~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf'
+F128 depth 128K prompt_n=131198 prefill 511.6 t/s wall 258s recall 4/4 [True, True, True, True]
+F128 depth 128K decode 24.33 30.07 24.99 med 24.99 | accept 0.34 0.49 0.35 | 复用后 prompt_n [490, 4, 4]
+stopped 646855
+[P128] ~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf sha=8601193d3d57 14:55:55
+[P128] up 14:56:04 vram 15841/15841 MiB | 加载路径: loading model '~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf'
+P128 depth 128K prompt_n=131198 prefill 460.5 t/s wall 286s recall 4/4 [True, True, True, True]
+P128 depth 128K decode 30.26 27.51 28.01 med 28.01 | accept 0.50 0.43 0.44 | 复用后 prompt_n [490, 4, 4]
+stopped 648811
+E410 DONE 15:01:23

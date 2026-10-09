@@ -1,0 +1,90 @@
+head: 15:17:04 llama-server 6053c18ef808 rocprofv3 /usr/bin/rocprofv3
+=== [B] 15:17:25 prof=1 extra='--spec-type draft-mtp --spec-draft-n-max 3'
+[B] up 15:17:34 vram 15842 15842 MiB
+req n1: prompt_n=904 gen=300 prompt 719.7 t/s decode 55.43 t/s (5394 ms) draft_n=277 draft_acc=205
+req n2: prompt_n=904 gen=300 prompt 715.6 t/s decode 55.09 t/s (5428 ms) draft_n=280 draft_acc=204
+req n3: prompt_n=904 gen=300 prompt 715.3 t/s decode 55.06 t/s (5431 ms) draft_n=280 draft_acc=204
+[B] stopping pid 656136 15:17:57
+~/notes/bench/e411/run.sh: 第 33 行： 656136 已杀死                  rocprofv3 --kernel-trace -d $E/$T -o run -- $B/llama-server $ARGS $EXTRA > $E/$T.server.log 2>&1
+[B] db=~/notes/bench/e411/B/run_results.db
+dispatches 1625442  总内核时间 31.62 s  各 GPU: agent1 15.89s, agent2 15.73s
+MMVQ/其它矩阵乘      57.4%  a1:28.8%  a2:28.6%
+MMQ 矩阵乘         18.7%  a1: 9.4%  a2: 9.2%
+通信 RCCL         11.6%  a1: 5.8%  a2: 5.7%
+拷贝/转换            2.9%  a1: 1.5%  a2: 1.5%
+DeltaNet/SSM     2.9%  a1: 1.4%  a2: 1.4%
+RMSNorm          1.8%  a1: 0.9%  a2: 0.9%
+激活量化             1.7%  a1: 0.9%  a2: 0.9%
+逐元素              1.2%  a1: 0.6%  a2: 0.6%
+注意力 FA           0.9%  a1: 0.5%  a2: 0.4%
+其它               0.6%  a1: 0.3%  a2: 0.3%
+RoPE             0.3%  a1: 0.2%  a2: 0.2%
+--- top 14 kernels
+ 21.2% 104310x     64.2us  _ZL13mul_mat_vec_qIL9ggml_type14ELi4ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devicePfj15HIP_vector_t
+ 18.8%  99180x     60.0us  _ZL13mul_mat_vec_qIL9ggml_type13ELi4ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devicePfj15HIP_vector_t
+ 11.6%  81680x     44.8us  _Z23ncclDevKernel_Generic_424ncclDevKernelArgsStorageILm4096EE.kd
+  7.5%   5922x    400.1us  _ZL13mul_mat_vec_qIL9ggml_type8ELi1ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devicePfj15HIP_vector_ty
+  4.8%  74092x     20.7us  _ZL13mul_mat_vec_qIL9ggml_type8ELi4ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devicePfj15HIP_vector_ty
+  4.6%   1392x   1052.2us  _ZL9mul_mat_qIL9ggml_type13ELi128ELb0EL9ggml_prec30EEvPKcPKiS5_S5_PfS6_PKf15HIP_vector_typeIjLj3EEiiiiiSA_SA_i
+  4.2%   1464x    899.2us  _ZL9mul_mat_qIL9ggml_type14ELi128ELb0EL9ggml_prec30EEvPKcPKiS5_S5_PfS6_PKf15HIP_vector_typeIjLj3EEiiiiiSA_SA_i
+  4.0%   1392x    915.7us  _ZL9mul_mat_qIL9ggml_type13ELi112ELb0EL9ggml_prec30EEvPKcPKiS5_S5_PfS6_PKf15HIP_vector_typeIjLj3EEiiiiiSA_SA_i
+  3.7%   1464x    800.2us  _ZL9mul_mat_qIL9ggml_type14ELi112ELb0EL9ggml_prec30EEvPKcPKiS5_S5_PfS6_PKf15HIP_vector_typeIjLj3EEiiiiiSA_SA_i
+  1.9%  28896x     20.6us  _Z20gated_delta_net_cudaILi128ELb0ELb1EEvPKfS1_S1_S1_S1_S1_PfS2_llllllllllll15HIP_vector_typeIjLj3EES4_fli.kd
+  1.5%   7794x     61.6us  _ZL13mul_mat_vec_qIL9ggml_type14ELi1ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devicePfj15HIP_vector_t
+  1.3% 309402x      1.3us  _ZL13quantize_q8_1PKfPvlllllj15HIP_vector_typeIjLj3EE.kd
+  1.3%  28608x     14.3us  _ZL15concat_non_contIjLi0EEvPKcS1_Pcllllmmmmllllmmmmllllmmmm.kd
+  1.1%  89218x      4.0us  _ZL12rms_norm_f32ILi1024ELb1ELb0ELb0EEvPKfPfilllfS1_lll15HIP_vector_typeIjLj3EES4_S4_S4_S1_lllS4_S4_S4_S4_f.kd
+--- 其它 里的前 8
+  0.2%  21670x __amd_rocclr_copyBuffer.kd
+  0.2%     50x __amd_rocclr_fillBufferUnAligned.kd
+  0.1%  19264x _Z9fwht_cudaILi256EfEvPKT0_Pflf.kd
+  0.1%  19264x _Z9fwht_cudaILi64EfEvPKT0_Pflf.kd
+  0.0%      2x __amd_rocclr_initHeap.kd
+=== [C] 15:48:58 prof=1 extra=''
+[C] up 15:49:06 vram 14428 14348 MiB
+req n1: prompt_n=904 gen=300 prompt 745.9 t/s decode 25.72 t/s (11624 ms) draft_n=None draft_acc=None
+req n2: prompt_n=904 gen=300 prompt 741.7 t/s decode 25.73 t/s (11619 ms) draft_n=None draft_acc=None
+req n3: prompt_n=904 gen=300 prompt 739.0 t/s decode 25.72 t/s (11626 ms) draft_n=None draft_acc=None
+[C] stopping pid 664251 15:49:48
+~/notes/bench/e411/run.sh: 第 35 行： 664251 已杀死                  rocprofv3 --kernel-trace -d $E/$T -o run -- $B/llama-server $ARGS $EXTRA > $E/$T.server.log 2>&1
+[C] db=~/notes/bench/e411/C/run_results.db
+dispatches 4085342  总内核时间 60.84 s  各 GPU: agent1 30.50s, agent2 30.34s
+MMVQ/其它矩阵乘      66.4%  a1:33.2%  a2:33.2%
+通信 RCCL         10.8%  a1: 5.5%  a2: 5.4%
+MMQ 矩阵乘          9.5%  a1: 4.8%  a2: 4.7%
+注意力 FA           2.4%  a1: 1.2%  a2: 1.2%
+RMSNorm          2.4%  a1: 1.2%  a2: 1.2%
+DeltaNet/SSM     2.2%  a1: 1.1%  a2: 1.1%
+拷贝/转换            2.1%  a1: 1.1%  a2: 1.1%
+激活量化             2.0%  a1: 1.0%  a2: 1.0%
+逐元素              1.2%  a1: 0.6%  a2: 0.6%
+其它               0.5%  a1: 0.3%  a2: 0.3%
+RoPE             0.4%  a1: 0.2%  a2: 0.2%
+--- top 14 kernels
+ 23.5% 282720x     50.7us  _ZL13mul_mat_vec_qIL9ggml_type14ELi1ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devicePfj15HIP_vector_t
+ 17.8% 233472x     46.4us  _ZL13mul_mat_vec_qIL9ggml_type13ELi1ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devicePfj15HIP_vector_t
+ 10.8% 237056x     27.8us  _Z23ncclDevKernel_Generic_424ncclDevKernelArgsStorageILm4096EE.kd
+  9.2%  41952x    133.2us  _ZL13mul_mat_vec_qIL9ggml_type13ELi1ELb1ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devicePfj15HIP_vector_t
+  7.6% 233484x     19.9us  _ZL13mul_mat_vec_qIL9ggml_type8ELi1ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devicePfj15HIP_vector_ty
+  5.2%  20064x    157.9us  _ZL13mul_mat_vec_qIL9ggml_type14ELi1ELb1ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devicePfj15HIP_vector_t
+  2.4%   1392x   1047.0us  _ZL9mul_mat_qIL9ggml_type13ELi128ELb0EL9ggml_prec30EEvPKcPKiS5_S5_PfS6_PKf15HIP_vector_typeIjLj3EEiiiiiSA_SA_i
+  2.2%  29184x     46.2us  _ZL18flash_attn_ext_vecILi256ELi1EL9ggml_type8ELS0_8ELb0EEvPKcS2_S2_S2_S2_PKiPfP15HIP_vector_typeIfLj2EEffffjf
+  2.1%   1392x    910.5us  _ZL9mul_mat_qIL9ggml_type13ELi112ELb0EL9ggml_prec30EEvPKcPKiS5_S5_PfS6_PKf15HIP_vector_typeIjLj3EEiiiiiSA_SA_i
+  2.1%   1416x    888.7us  _ZL9mul_mat_qIL9ggml_type14ELi128ELb0EL9ggml_prec30EEvPKcPKiS5_S5_PfS6_PKf15HIP_vector_typeIjLj3EEiiiiiSA_SA_i
+  1.8%   1416x    790.3us  _ZL9mul_mat_qIL9ggml_type14ELi112ELb0EL9ggml_prec30EEvPKcPKiS5_S5_PfS6_PKf15HIP_vector_typeIjLj3EEiiiiiSA_SA_i
+  1.7% 850476x      1.3us  _ZL13quantize_q8_1PKfPvlllllj15HIP_vector_typeIjLj3EE.kd
+  1.5% 238908x      3.8us  _ZL12rms_norm_f32ILi1024ELb1ELb0ELb0EEvPKfPfilllfS1_lll15HIP_vector_typeIjLj3EES4_S4_S4_S1_lllS4_S4_S4_S4_f.kd
+  1.3%  16416x     48.6us  _ZL13mul_mat_vec_qIL9ggml_type23ELi1ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devicePfj15HIP_vector_t
+--- 其它 里的前 8
+  0.2%  59264x _Z9fwht_cudaILi256EfEvPKT0_Pflf.kd
+  0.1%  59264x _Z9fwht_cudaILi64EfEvPKT0_Pflf.kd
+  0.1%     34x __amd_rocclr_fillBufferUnAligned.kd
+  0.1%  19450x __amd_rocclr_copyBuffer.kd
+  0.0%      2x __amd_rocclr_initHeap.kd
+=== [A] 15:51:21 prof=0 extra='--spec-type draft-mtp --spec-draft-n-max 3'
+[A] up 15:51:28 vram 15842 15842 MiB
+req n1: prompt_n=904 gen=300 prompt 741.6 t/s decode 62.73 t/s (4767 ms) draft_n=277 draft_acc=205
+req n2: prompt_n=904 gen=300 prompt 740.0 t/s decode 62.22 t/s (4806 ms) draft_n=280 draft_acc=204
+req n3: prompt_n=904 gen=300 prompt 742.6 t/s decode 62.05 t/s (4819 ms) draft_n=280 draft_acc=204
+[A] stopping pid 665461 15:51:49
+E411 DONE 15:51:58

@@ -1,0 +1,20 @@
+head: 16:18:08 llama-server 6053c18ef808 rocprofv3 /usr/bin/rocprofv3
+=== [Pd] 16:18:29 bin=qwen38-tp-q8k-fb5d45967 cb10db9e3591 KQ8=unset
+[Pd] up 16:18:36 vram 15842 15842 MiB
+req n1: prompt_n=904 gen=300 prompt 744.5 t/s decode 62.95 t/s (4750 ms) draft_n=277 draft_acc=205
+req n2: prompt_n=904 gen=300 prompt 742.5 t/s decode 61.80 t/s (4838 ms) draft_n=286 draft_acc=203
+req n3: prompt_n=904 gen=300 prompt 744.4 t/s decode 62.92 t/s (4752 ms) draft_n=277 draft_acc=205
+[Pd] stopping pid 673541 16:18:57
+=== [Fd] 16:19:07 bin=qwen38-tp-fa8-2c11838c6 6053c18ef808 KQ8=1
+[Fd] up 16:19:14 vram 15842 15842 MiB
+req n1: prompt_n=904 gen=300 prompt 741.6 t/s decode 62.79 t/s (4762 ms) draft_n=277 draft_acc=205
+req n2: prompt_n=904 gen=300 prompt 739.4 t/s decode 62.10 t/s (4815 ms) draft_n=280 draft_acc=204
+req n3: prompt_n=904 gen=300 prompt 743.1 t/s decode 62.15 t/s (4811 ms) draft_n=280 draft_acc=204
+[Fd] stopping pid 673779 16:19:35
+=== [Pd2] 16:19:44 bin=qwen38-tp-q8k-fb5d45967 cb10db9e3591 KQ8=unset
+[Pd2] up 16:19:52 vram 15842 15842 MiB
+req n1: prompt_n=904 gen=300 prompt 737.2 t/s decode 62.73 t/s (4767 ms) draft_n=277 draft_acc=205
+req n2: prompt_n=904 gen=300 prompt 734.6 t/s decode 61.54 t/s (4859 ms) draft_n=286 draft_acc=203
+req n3: prompt_n=904 gen=300 prompt 738.0 t/s decode 62.56 t/s (4779 ms) draft_n=277 draft_acc=205
+[Pd2] stopping pid 673965 16:20:12
+E412 DONE 16:20:21

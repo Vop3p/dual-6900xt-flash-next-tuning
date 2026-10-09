@@ -1,0 +1,39 @@
+#!/bin/bash
+# E411: qwen38-tp 短上下文解码分时。臂 B(prod+rocprof) C(nomtp+rocprof) A(prod 无 rocprof)
+E=~/notes/bench/e411; B=~/prod-bin/qwen38-tp-fa8-2c11838c6; M=~/models/Qwen3.8-27B-v3/Qwen3.8-27B-UD-Q5_K_XL.gguf
+PORT=5899; mkdir -p $E/kv
+export LD_LIBRARY_PATH=$B:/opt/rocm/lib NCCL_P2P_DISABLE=1 GGML_FATTN_KQ8=1
+echo "head: $(date +%T) llama-server $(sha256sum $B/llama-server | cut -c1-12) rocprofv3 $(which rocprofv3)"
+{ ./guard.sh >/dev/null && curl -s 127.0.0.1:9292/running | grep -q '"running":\[\]'; } || { echo GUARD FAILED; exit 1; }
+ARGS="-m $M --chat-template-file ~/models/qwen-chat-template.jinja -ngl 99 -fa on -sm tensor -np 3 -kvu --cache-type-k q8_0 --cache-type-v q8_0 -b 1024 -ub 512 -c 196608 --jinja --temp 1.0 --top-p 0.95 --top-k 20 --reasoning-format deepseek --cache-ram 32768 --slot-save-path $E/kv --host 127.0.0.1 --port $PORT"
+MTP="--spec-type draft-mtp --spec-draft-n-max 3"
+req() { python3 - "$1" "$2" <<'PY'
+import sys,json,urllib.request
+nonce,n=sys.argv[1],int(sys.argv[2])
+para="殷墟位于河南安阳西北郊的洹河两岸，是商代晚期的都城遗址。1928年开始的科学发掘出土了大量甲骨、青铜器和玉器，其中司母戊鼎是已知最重的青铜器。甲骨文记录了商王占卜的内容，涉及祭祀、战争、农业和天气，是研究商代社会的直接材料。"
+prompt=f"[{nonce}] "+para*12+f"\n\n请根据上面的材料，写一篇约 500 字的短文介绍殷墟的考古价值。/no_think"
+d=json.dumps({"model":"x","messages":[{"role":"user","content":prompt}],"max_tokens":n,"temperature":0}).encode()
+r=json.load(urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:5899/v1/chat/completions",d,{"Content-Type":"application/json"}),timeout=600))
+t=r.get("timings",{}); u=r["usage"]
+print(f"req {nonce}: prompt_n={u['prompt_tokens']} gen={u['completion_tokens']} prompt {t.get('prompt_per_second',0):.1f} t/s decode {t.get('predicted_per_second',0):.2f} t/s ({t.get('predicted_ms',0):.0f} ms) draft_n={t.get('draft_n')} draft_acc={t.get('draft_n_accepted')}")
+PY
+}
+arm() { T=$1; PROF=$2; EXTRA=$3
+  echo "=== [$T] $(date +%T) prof=$PROF extra='$EXTRA'"
+  rm -rf $E/kv/*; cd $E
+  if [ "$PROF" = 1 ]; then rocprofv3 --kernel-trace -d $E/$T -o run -- $B/llama-server $ARGS $EXTRA > $E/$T.server.log 2>&1 &
+  else $B/llama-server $ARGS $EXTRA > $E/$T.server.log 2>&1 & fi
+  for i in $(seq 1 180); do curl -sf 127.0.0.1:$PORT/health >/dev/null 2>&1 && break; sleep 1; done
+  curl -sf 127.0.0.1:$PORT/health >/dev/null || { echo "[$T] server FAILED to start"; tail -5 $E/$T.server.log; return; }
+  echo "[$T] up $(date +%T) vram $(cat /sys/class/drm/card*/device/mem_info_vram_used | awk '{printf "%.0f ",$1/1048576}')MiB"
+  req warm 16 >/dev/null
+  for n in 1 2 3; do req n$n 300; done
+  SP=$(ss -ltnp 2>/dev/null | awk -v p=":$PORT" '$4 ~ p {print $NF}' | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)
+  echo "[$T] stopping pid $SP $(date +%T)"; kill -INT $SP; for i in $(seq 1 120); do kill -0 $SP 2>/dev/null || break; sleep 1; done
+  wait; sleep 8
+  [ "$PROF" = 1 ] && { DB=$(find $E/$T -name "*.db" | head -1); echo "[$T] db=$DB"; [ -n "$DB" ] && python3 ~/notes/bench/e377/agg.py $DB; }
+}
+arm B 1 "$MTP"
+arm C 1 ""
+arm A 0 "$MTP"
+echo "E411 DONE $(date +%T)"

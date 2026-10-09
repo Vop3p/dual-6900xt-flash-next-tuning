@@ -1,0 +1,11 @@
+#!/bin/bash
+# kld.sh <tag> <bin_dir> <model>: E157 基准（-c 512 -ub 512 全走 MMQ），对照 bf16.kld
+T=$1; B=$2; M=$3
+cd ~/notes/bench/e157
+for i in $(seq 1 30); do [ $(cat /sys/class/drm/card0/device/mem_info_vram_used) -lt 1073741824 ] && [ $(cat /sys/class/drm/card1/device/mem_info_vram_used) -lt 1073741824 ] && break; sleep 2; done
+{ ./guard.sh >/dev/null && curl -s 127.0.0.1:9292/running | grep -q "\"running\":\[\]"; } || { echo GUARD; exit 1; }
+export LD_LIBRARY_PATH=$B:/opt/rocm/lib NCCL_P2P_DISABLE=1
+echo "[kld $T] $B $M $(date +%T)"
+$B/llama-perplexity -m $M -c 512 -b 2048 -ub 512 -ngl 99 -fa on -sm tensor -ctk q8_0 -ctv q8_0 --kl-divergence-base bf16.kld --kl-divergence > ~/notes/bench/e407/kld-$T.log 2>&1
+echo "[kld $T] exit=$? $(date +%T)"
+grep -E "Mean KLD|Maximum KLD|99.9%|Same top|PPL" ~/notes/bench/e407/kld-$T.log | tail -6

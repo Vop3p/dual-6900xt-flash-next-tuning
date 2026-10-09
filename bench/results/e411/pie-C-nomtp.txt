@@ -1,0 +1,56 @@
+# E411 arm C (no MTP, rocprofv3 kernel trace), decode phase only
+bins total 878  prefill 91  decode 720  (50 ms each; decode span 36.0 s)
+[prefill] span 4.55 s  GPU 忙碌率 a1 87.0%, a2 86.8%
+[decode] span 36.00 s  GPU 忙碌率 a1 73.7%, a2 73.2%
+[decode] 内核时间合计 52.88 s(两卡)
+  MMVQ 1列             75.9%
+  通信 RCCL             10.1%
+  注意力 FA               2.7%
+  RMSNorm              2.6%
+  激活量化                 2.3%
+  拷贝/转换                2.3%
+  DeltaNet/SSM         1.6%
+  逐元素                  1.2%
+  RoPE                 0.4%
+  MMVQ 4列(草稿验证批)       0.3%
+  其它                   0.3%
+  MMVQ 其它列             0.2%
+  --- decode top 10
+   27.1%  282720x    50.7us _ZL13mul_mat_vec_qIL9ggml_type14ELi1ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_dev
+   20.5%  233472x    46.4us _ZL13mul_mat_vec_qIL9ggml_type13ELi1ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_dev
+   10.6%   41952x   133.2us _ZL13mul_mat_vec_qIL9ggml_type13ELi1ELb1ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_dev
+   10.1%  234954x    22.8us _Z23ncclDevKernel_Generic_424ncclDevKernelArgsStorageILm4096EE.kd
+    8.8%  233484x    19.9us _ZL13mul_mat_vec_qIL9ggml_type8ELi1ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_devi
+    6.0%   20064x   157.9us _ZL13mul_mat_vec_qIL9ggml_type14ELi1ELb1ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_dev
+    2.6%   29184x    46.2us _ZL18flash_attn_ext_vecILi256ELi1EL9ggml_type8ELS0_8ELb0EEvPKcS2_S2_S2_S2_PKiPfP15HIP_vect
+    2.0%  850259x     1.3us _ZL13quantize_q8_1PKfPvlllllj15HIP_vector_typeIjLj3EE.kd
+    1.6%  236789x     3.6us _ZL12rms_norm_f32ILi1024ELb1ELb0ELb0EEvPKfPfilllfS1_lll15HIP_vector_typeIjLj3EES4_S4_S4_S1
+    1.5%   16416x    48.6us _ZL13mul_mat_vec_qIL9ggml_type23ELi1ELb0ELb0ELb0EEvPKvS2_PKi31ggml_cuda_mm_fusion_args_dev
+
+# gaps
+agent1: decode 内核 2020205  忙 26.54s  空隙合计 21.03s
+   gap      0–5       us:  1858233 次  合计   6.98s
+   gap      5–20      us:   152229 次  合计   1.09s
+   gap     20–100     us:     7637 次  合计   0.39s
+   gap    100–1000    us:     1964 次  合计   0.78s
+   gap   1000–1000000000us:      139 次  合计  11.78s
+   ≥100us 的空隙,按(前内核→后内核)前 6:
+      6.43s   1056x  __amd_rocclr_copyBuffer.kd -> __amd_rocclr_copyBuffer.kd
+      2.45s      3x  __amd_rocclr_copyBuffer.kd -> __amd_rocclr_fillBufferUnAligned.kd
+      1.53s    915x  _ZL13mul_mat_vec_qIL9ggml_type8ELi1ELb0E -> __amd_rocclr_copyBuffer.kd
+      1.18s      4x  __amd_rocclr_fillBufferUnAligned.kd -> __amd_rocclr_copyBuffer.kd
+      0.53s      1x  __amd_rocclr_copyBuffer.kd -> _ZL23convert_unary_cont_vec4If14__hip_bf
+      0.11s      1x  _ZL13mul_mat_vec_qIL9ggml_type8ELi2ELb0E -> __amd_rocclr_initHeap.kd
+agent2: decode 内核 2020205  忙 26.39s  空隙合计 21.17s
+   gap      0–5       us:  1857571 次  合计   7.00s
+   gap      5–20      us:   152595 次  合计   1.10s
+   gap     20–100     us:     7433 次  合计   0.39s
+   gap    100–1000    us:     2337 次  合计   0.88s
+   gap   1000–1000000000us:      152 次  合计  11.80s
+   ≥100us 的空隙,按(前内核→后内核)前 6:
+      6.43s   1050x  __amd_rocclr_copyBuffer.kd -> __amd_rocclr_copyBuffer.kd
+      2.46s      3x  __amd_rocclr_copyBuffer.kd -> __amd_rocclr_fillBufferUnAligned.kd
+      1.56s    914x  _ZL13mul_mat_vec_qIL9ggml_type8ELi1ELb0E -> __amd_rocclr_copyBuffer.kd
+      1.18s      4x  __amd_rocclr_fillBufferUnAligned.kd -> __amd_rocclr_copyBuffer.kd
+      0.54s      1x  __amd_rocclr_copyBuffer.kd -> _ZL23convert_unary_cont_vec4I14__hip_bfl
+      0.24s    197x  __amd_rocclr_copyBuffer.kd -> _ZL12rms_norm_f32ILi1024ELb1ELb0ELb0EEvP
