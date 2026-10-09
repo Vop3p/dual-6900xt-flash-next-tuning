@@ -102,6 +102,18 @@ code{font-family:var(--f-data);font-size:.92em}
 </section>
 
 <section>
+  <h2>一张卡、helper、双卡分层（0.1.41，32K）</h2>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--l-drop)"></i>stock</span>
+    <span><i class="dot" style="background:var(--l-prompt)"></i>+ 两个开关（F16 prompt、SH_STREAM）</span>
+    <span><i class="dot" style="background:var(--l-engine)"></i>+ 三个 PR + rocBLAS 缓存 + MMQ 补丁</span>
+    <span><i class="dot" style="background:var(--l-decode)"></i>+ E387 解码配置（仅分层）</span>
+  </div>
+  <div class="panel"><div class="chart" id="modes"></div></div>
+  <p class="foot">E388 / E388a，同一晚同一脚本，无图片编码器，每格 2 次取中位。单卡 16 GB 只装 ~4,500 个专家槽（命中 83%），解码压在 48–52；helper 让第二张卡只放专家，解码 66–75，prompt 仍是单卡速度；分层两项都提。helper 臂带 STRATA_HIP_ADAPT_KERNEL_COPY=1。</p>
+</section>
+
+<section>
   <h2>每一步</h2>
   <div class="filters" id="filters" role="group" aria-label="按思路筛选"></div>
   <div class="tl" id="tl"></div>
@@ -159,6 +171,32 @@ const M=[
   svg.append(el('text',{x:L,y:10},'tok/s'));
   svg.append(el('text',{x:W-R+8,y:10},'解码'));
   document.getElementById('speed').append(svg);
+})();
+
+
+// one card / helper / split at 32K (E388, E388a): prompt tok/s and decode tok/s, grouped bars
+(function(){
+  const MODES=['单卡','helper','双卡分层'];
+  const SER=[['stock','var(--l-drop)',[502,503,767],[48.0,66.5,65.0]],['两开关','var(--l-prompt)',[1102,1103,1619],[51.6,74.9,74.6]],['PRs','var(--l-engine)',[1174,1173,1714],[50.9,75.2,68.8]],['E387','var(--l-decode)',[null,null,1707],[null,null,82.3]]];
+  const W=860,H=300,T=24,B=36,GAP=40,PW=(W-GAP)/2;
+  const svg=el('svg',{viewBox:`0 0 ${W} ${H}`});
+  function panel(x0,title,idx,max,fmt){
+    const L=x0+48,R=x0+PW-8,y=v=>T+(H-T-B)*(1-v/max);
+    svg.append(el('text',{x:L,y:14},title));
+    const ticks=max>1000?[0,500,1000,1500,2000]:[0,20,40,60,80];
+    ticks.forEach(v=>{svg.append(el('line',{x1:L,x2:R,y1:y(v),y2:y(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-6,y:y(v)+4,'text-anchor':'end'},v.toLocaleString('en-US')));});
+    const gw=(R-L)/MODES.length, bw=gw/5.2;
+    MODES.forEach((m,i)=>{
+      svg.append(el('text',{x:L+gw*i+gw/2,y:H-B+18,'text-anchor':'middle'},m));
+      SER.forEach(([name,col,pv,dv],j)=>{const v=(idx===0?pv:dv)[i]; if(v==null) return;
+        const x=L+gw*i+gw*0.1+bw*j;
+        svg.append(el('rect',{x,y:y(v),width:bw-2,height:y(0)-y(v),fill:col,rx:2}));
+        svg.append(el('text',{x:x+(bw-2)/2,y:y(v)-4-(j%2)*11,'text-anchor':'middle',style:`fill:${col};font-size:10px`},fmt(v)));});
+    });
+  }
+  panel(0,'读 prompt tok/s（32K）',0,2000,v=>v.toLocaleString('en-US'));
+  panel(PW+GAP,'解码 tok/s（32K）',1,90,v=>String(v));
+  document.getElementById('modes').append(svg);
 })();
 
 const LANES={engine:['引擎选择','var(--l-engine)'],prompt:['读 prompt','var(--l-prompt)'],decode:['解码','var(--l-decode)'],stable:['稳定性 #884','var(--l-stable)'],drop:['试过没采用','var(--l-drop)']};

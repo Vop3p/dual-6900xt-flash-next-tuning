@@ -20,6 +20,13 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 
 **License:** the llama.cpp patches (`patches/`) and the scripts (`bench/`) are MIT, the same license as llama.cpp, so they can be taken, merged and shipped; the text, figures and measurement data are CC BY-NC 4.0 (attribution, no commercial use). See `LICENSE`. `CITATION.cff` has a citation entry.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/modes-chart-en-dark.png">
+  <img alt="One card, expert helper and layer split on 0.1.41 at 32K: prompt and decode tok/s for stock, the two switches and the PRs" src="docs/modes-chart-en-light.png" width="100%">
+</picture>
+
+*One card vs expert helper vs layer split (E388 / E388a, 0.1.41, 32K prompts, no vision encoder): a 16 GB card alone decodes at 48–52 whatever the tree (about 4,500 expert slots, 83% hit rate); the helper mode lifts decode to 66–75 at one card's prompt speed; the split lifts both, and the E387 decode configuration adds the last step to 82.*
+
 ## 0. Where it stands
 
 - **Production (binary since 10-08 21:25, decode config since 10-09 00:16):** Strata upstream 0.1.41 + 7 local patches (upstream PRs #1149 / #1151 / #1167 + a per-device rocBLAS solution cache) + a modified llama.cpp ggml (MMQ dot-chain heads in the VOP3P encoding on RDNA2). Two-card layer split, IQ3_S experts, int8 KV, MTP `--spec 4 --spec-min-p 0.5`.

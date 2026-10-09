@@ -20,6 +20,13 @@
 
 **许可**：llama.cpp 补丁（`patches/`）和脚本（`bench/`）是 MIT，与 llama.cpp 相同，可以直接拿走、合并、随软件分发；文字、图和测量数据是 CC BY-NC 4.0（署名、禁止商用）。见 `LICENSE`；`CITATION.cff` 可直接引用。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/modes-chart-zh-dark.png">
+  <img alt="0.1.41 上单卡、helper、双卡分层在 32K 的 prompt 与解码（stock / 两开关 / PRs）" src="docs/modes-chart-zh-light.png" width="100%">
+</picture>
+
+*单卡 vs helper vs 双卡分层（E388 / E388a，0.1.41，32K，无图片编码器）：16 GB 单卡不管哪个树解码都是 48–52（约 4,500 专家槽、命中 83%）；helper 把解码提到 66–75、prompt 仍是单卡速度；分层两项都提，E387 解码配置再加最后一步到 82。*
+
 `bench/` 是 A/B 骨架：`run_ab.sh`（每臂一个冷启动 server、全量日志、确认行核对）、`benchmark.py`（负载）、`ab_compare.py`（逐请求对比文本与速度）、`monitor_amd.py`（遥测采样）。路径是占位符，按自己的机器改。
 
 Developed with an AI coding assistant; every number here was measured on the machine above.
