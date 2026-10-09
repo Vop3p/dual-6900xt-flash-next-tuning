@@ -22,3 +22,7 @@ cmake --build build -j
 End to end (4–6 together, production `qwen38-tp`, Qwen3.8-27B UD-Q5_K_XL, two cards `-sm tensor`): prompt +4.6–6.1% across 4K–196K, KLD vs bf16 0.003941 → 0.003736 (top-1 agreement 97.32% → 97.12%, within the noise of the base quant). In [Strata](https://github.com/Niko1221/Strata), which takes its expert prompt GEMMs from this MMQ, building with `-DSTRATA_GGML_DIR=/path/to/this/llama.cpp` gives +1.5% at a 32K prompt with byte-identical output (iq3_s kernel +2.6%).
 
 Only tested on gfx1030 (ROCm 10.0, HIP clang). The `asm` in patches 5–6 is guarded by `defined(GGML_USE_HIP) && defined(RDNA2)`; other targets compile the unchanged `ggml_cuda_dp4a`. `test-backend-ops -o MUL_MAT`: 1304/1304 pass.
+
+## License
+
+MIT (`LICENSE` in this directory), the same license as llama.cpp. The patches are derived works of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT, Copyright (c) 2023-2026 The ggml authors); applying them with `git am` adds nothing that llama.cpp's own license does not already permit. Cite the repository (`CITATION.cff` at the top level) or the commit hashes in the patch files.

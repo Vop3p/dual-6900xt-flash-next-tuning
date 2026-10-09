@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use these measurements or patches, please cite this repository."
+title: "dual-6900xt-flash-next-tuning: tuning log for Qwen3.8-Flash-Next (IQ3_S) on 2x RX 6900 XT, llama.cpp to Strata"
+authors:
+  - name: "xjc10"
+date-released: 2026-10-09
+version: "2026-10-09"
+url: "https://github.com/xjc10/dual-6900xt-flash-next-tuning"
+repository-code: "https://github.com/xjc10/dual-6900xt-flash-next-tuning"
+license: MIT
+keywords:
+  - llama.cpp
+  - Strata
+  - ROCm
+  - gfx1030
+  - RDNA2
+  - MoE
+  - MMQ

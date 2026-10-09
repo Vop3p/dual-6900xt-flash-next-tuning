@@ -18,6 +18,8 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 
 **`patches/llama.cpp/`** — the six llama.cpp patches behind the `q8k ggml` step (RDNA2 MMQ: wider tiles, mad24 scales, Q8_K-style activations, VOP3P dot-chain heads), on upstream `159c651f5`, with build flags and measured effects in [their README](patches/llama.cpp/README.md). Strata picks them up through `-DSTRATA_GGML_DIR`.
 
+**License:** MIT for everything here — text, figures, scripts and the llama.cpp patches (`LICENSE`; the patches carry their own copy, the same license as llama.cpp). `CITATION.cff` has a citation entry.
+
 ## 0. Where it stands
 
 - **Production (binary since 10-08 21:25, decode config since 10-09 00:16):** Strata upstream 0.1.41 + 7 local patches (upstream PRs #1149 / #1151 / #1167 + a per-device rocBLAS solution cache) + a modified llama.cpp ggml (MMQ dot-chain heads in the VOP3P encoding on RDNA2). Two-card layer split, IQ3_S experts, int8 KV, MTP `--spec 4 --spec-min-p 0.5`.
