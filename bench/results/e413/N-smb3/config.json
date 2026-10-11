@@ -1,0 +1,63 @@
+{
+  "exe": "/work/prs/build-hip/strata",
+  "args": [
+    "--pack",
+    "/m/packs/iq3_s",
+    "--native",
+    "/m/flash-next/GSQ-RCO-IQ3_S/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+    "--ple-gguf",
+    "/m/flash-next/GSQ-RCO-IQ3_S/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+    "--expert-profile",
+    "/work/prod-141/expert-profile.bin",
+    "--expert-cache",
+    "auto",
+    "--prefill",
+    "auto",
+    "--spec",
+    "3",
+    "--spec-min-p",
+    "0.7",
+    "--mtp",
+    "/m/mtp/rt",
+    "--max-context",
+    "131072",
+    "--kv",
+    "int8",
+    "--kv-resident",
+    "32768",
+    "--ple-io",
+    "ram",
+    "--vram-reserve-mib",
+    "700",
+    "--pipeline-windows",
+    "2"
+  ],
+  "cwd": "/work/prs",
+  "tokenizer": "/m/packs/iq3_s/tokenizer",
+  "model_name": "strata-split",
+  "log": "/bench/N-smb3/engine.log",
+  "lib_dirs": [
+    "/opt/rocm/lib"
+  ],
+  "port": 8080,
+  "backend": "hip",
+  "gpu": [
+    1,
+    0
+  ],
+  "gpus_asked": true,
+  "layer_split": "auto",
+  "env": {
+    "STRATA_ROCBLAS_TUNING": "/work/prod-141/tools/hip",
+    "STRATA_IO_THREADS": "128",
+    "STRATA_SELECT_SGEMM": "1",
+    "STRATA_SELECT_SGEMM_VERBOSE": "1",
+    "STRATA_SH_STREAM": "1",
+    "STRATA_HIP_PROMPT_F16": "1",
+    "STRATA_HIP_ADAPT_KERNEL_COPY": "1",
+    "STRATA_PREFILL_CPU_SHARE": "auto",
+    "STRATA_TUNING_CACHE": "/home/user/.cache/strata",
+    "STRATA_SPLIT_MTP_BATCH": "1"
+  },
+  "gpu_order": "as_given"
+}

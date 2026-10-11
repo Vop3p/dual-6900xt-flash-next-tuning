@@ -1,0 +1,91 @@
+#!/bin/bash
+# run_template.sh - one A/B experiment on AiBox: cold server per arm, guard first, full logs, switch confirmation.
+# Copy to notes/bench/eNNN/run_eNNN.sh, fill in the CONFIG block and the ARMS block, run inside tmux:
+#   tmux new -d -s eNNN "bash notes/bench/eNNN/run_eNNN.sh > notes/bench/eNNN/report.out 2>&1"
+# and watch report.out with a Monitor whose filter covers every end state ("=== |exit [^0]|DONE|guard|rror|Traceback").
+#
+# Built from E342-E352 (Strata serve harness). For llama.cpp / SGLang arms, keep the structure and replace the
+# "start the server" and "stop the server" lines (llama-server --port 8089 ...; kill by pid), never `docker run`.
+set -u
+
+# ---------------------------------------------------------------- CONFIG (edit)
+E=<path>
+PY=<path>
+PACK=<path>       # tokenizer for benchmark.py
+SKILL=<path>
+SPL=<path>
+TARGETS=4096,32768
+RUNS=2
+CONFIRM_RE='rocBLAS tuning enabled|run FP16 in and out|adaptive swaps copy with a kernel|pipeline|SH_STREAM|select: SIMT|select: SGEMM|TAIL_SKIP|route-resident|SPLIT_MTP_BATCH|draft K/V|aux-cpus|aux_cpus|PF_FUSED|fused|resident sort|RESIDENT_SORT'
+
+knob() { timeout 10 sudo -n /usr/local/bin/strata-gfxoff status 2>&1 | tr -s ' \n' ' '; }   # GFXOFF state (reference count! see pitfalls)
+vram() { echo "card0 $(( $(cat /sys/class/drm/card0/device/mem_info_vram_used)/1048576 )) MiB, card1 $(( $(cat /sys/class/drm/card1/device/mem_info_vram_used)/1048576 )) MiB"; }
+
+# arm <name> <worktree with build-hip/strata> <base config> <env a=b,c=d or -> [extra engine args...]
+# optional env: NOBENCH=1 (skip benchmark.py), HOOK=<function> (called with $out while the server is up),
+#               VISION_JSON='{...}' (adds a "vision" section; pair it with --vision --vram-reserve-mib 700, E349)
+arm() {
+  local name=$1 wt=$2 exe=$3 base=$4 envv=$5; shift 5; local out=$E/$name; mkdir -p "$out"
+  "$SKILL/guard.sh" > /dev/null || { echo "=== $name guard failed"; return; }
+  curl -s 127.0.0.1:9292/running | grep -q '"running":\[\]' || { echo "=== $name llama-swap busy"; return; }
+  python3 - "$name" "$wt" "$exe" "$base" "$out" "$envv" "$@" <<'PY'
+import json, os, sys
+name, wt, exe, base, out, envv, extra = sys.argv[1:7] + [sys.argv[7:]]
+j = json.load(open(base)); a = list(j['args'])
+j['args'] = a + extra; j['exe'] = exe; j['cwd'] = wt; j['log'] = f'{out}/engine.log'
+if os.environ.get('GPU_ORDER'): j['gpu_order'] = os.environ['GPU_ORDER']
+if os.environ.get('NOPW'):
+    while '--pipeline-windows' in j['args']:
+        i = j['args'].index('--pipeline-windows'); del j['args'][i:i+2]
+for k, e in (('--spec', 'SPEC'), ('--spec-min-p', 'MINP')):
+    if os.environ.get(e):
+        i = j['args'].index(k); j['args'][i+1] = os.environ[e]
+env = {} if os.environ.get('CLEAR_ENV') else dict(j.get('env') or {})
+if os.environ.get('NOVISION'):
+    j.pop('vision', None)
+    while '--vision' in j['args']: j['args'].remove('--vision')
+if envv != '-':
+    for kv in envv.split(','):
+        k, v = kv.split('=', 1); env[k] = v
+j['env'] = env
+if os.environ.get('VISION_JSON'): j['vision'] = json.loads(os.environ['VISION_JSON'])
+json.dump(j, open(f'{out}/config.json', 'w'), indent=2)
+PY
+  rm -f "$out"/engine.log "$out"/server.out "$out"/telemetry.jsonl
+  python3 "$SKILL/monitor_amd.py" "$out/telemetry.jsonl" & local mon=$!
+  (cd "$wt" && tmux new -d -s strata-run "$PY serve/server.py --engine strata --config $out/config.json --port 8089 > $out/server.out 2>&1")
+  for i in $(seq 200); do grep -qiE 'ready:|error|fail|stopped|unexpectedly' "$out/server.out" 2>/dev/null && break; sleep 3; done
+  local pid=$(for p in /proc/[0-9]*; do [ "$(readlink $p/exe 2>/dev/null)" = "$exe" ] && basename $p; done | head -1)
+  { echo "name $name"; echo "worktree $wt $(git -C "$wt" log -1 --format='%H %s' | cut -c1-120)";
+    echo "binary sha256 $(sha256sum "$exe" | cut -d' ' -f1)"; echo "env $envv"; echo "extra args $*";
+    echo "gfxoff knob at start: $(knob)";
+    grep -E "^(STRATA_|CMAKE_HIP_ARCH|CMAKE_BUILD_TYPE|GPU_TARGETS)" "$wt/build-hip/CMakeCache.txt" 2>/dev/null | grep -v "_DIR\|INTERNAL" | tr '\n' ' '; echo; } > "$out/BUILD.txt"
+  echo "=== $name start $(date +%T) pid $pid knob $(knob)"
+  [ "${NOBENCH:-0}" = 1 ] || { timeout 3000 $PY "$SKILL/benchmark.py" --root "$wt" --pack "$PACK" --url http://127.0.0.1:8089 --out "$out" --targets $TARGETS --runs $RUNS > "$out/benchmark.out" 2>&1; echo "$name benchmark exit $?"; }
+  [ -n "${HOOK:-}" ] && $HOOK "$out"
+  echo "  $name vram: $(vram)"
+  curl -s http://127.0.0.1:8089/v1/status > "$out/final-status.json"
+  tmux send-keys -t strata-run C-c; sleep 8; tmux kill-session -t strata-run 2>/dev/null
+  for i in $(seq 60); do [ -d /proc/$pid ] || break; sleep 2; done
+  kill $mon 2>/dev/null
+  echo "=== $name done $(date +%T): stalls $(grep -cE 'stall report|timed out at layer|no progress for' "$out/engine.log"); confirm lines $(grep -cE "$CONFIRM_RE" "$out/engine.log")"
+}
+
+# ---------------------------------------------------------------- ARMS
+
+# ---------------------------------------------------------------- ARMS (E413)
+# wait for the 0.1.42 build
+until grep -q "BUILD-EXIT" <path> do sleep 20; done
+grep -q "BUILD-EXIT 0" <path> || { echo "BUILD FAILED"; tail -5 <path> exit 1; }
+echo "build ok $(date +%T): $(sha256sum <path> | cut -c1-12) $(<path> --version 2>&1 | head -1)"
+(cd <path> && ctest -R "rocblas_tuning_table_test|split_rules_test|share_rules_test" 2>&1 | tail -2)
+PROD=<path>
+# ---------------------------------------------------------------- ARMS (E413b: SPLIT_MTP_BATCH 复核)
+until grep -q "E413 DONE" <path> do sleep 15; done
+NEW=<path> NEXE=$NEW/build-hip/strata
+export NOVISION=1
+TARGETS=4096,32768,128000 arm N-smb2 $NEW $NEXE "$SPL" STRATA_SPLIT_MTP_BATCH=1
+TARGETS=4096,32768,128000 arm N3     $NEW $NEXE "$SPL" -
+TARGETS=4096,32768,128000 arm N-smb3 $NEW $NEXE "$SPL" STRATA_SPLIT_MTP_BATCH=1
+RUNS=1 NOPW=1 SPEC=4 MINP=0.5 arm Nd-smb $NEW $NEXE "$SPL" STRATA_SPLIT_MTP_BATCH=1
+echo "E413b DONE $(date +%T)"

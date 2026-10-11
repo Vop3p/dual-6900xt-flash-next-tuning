@@ -11,7 +11,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/speed-chart-en-dark.png">
-  <img alt="Prompt and decode speed, step by step, llama.cpp 10-02 to Strata 0.1.41 10-08" src="docs/speed-chart-en-light.png" width="100%">
+  <img alt="Prompt and decode speed, step by step, llama.cpp 10-02 to Strata 0.1.42 10-10" src="docs/speed-chart-en-light.png" width="100%">
 </picture>
 
 *Prompt tok/s at 4K, 32K–37K and 128K (left axis) and decode tok/s (right axis) at each production state. Points come from different experiments under slightly different conditions (the 4K points of the first two steps are 5K prompts; the notes under the chart on the interactive page list the rest); a dashed segment bridges a step where that metric was not measured.*
@@ -31,8 +31,8 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 
 ## 0. Where it stands
 
-- **Production (binary since 10-08 21:25, decode config since 10-09 00:16):** Strata upstream 0.1.41 + 7 local patches (upstream PRs #1149 / #1151 / #1167 + a per-device rocBLAS solution cache) + a modified llama.cpp ggml (MMQ dot-chain heads in the VOP3P encoding on RDNA2). Two-card layer split, IQ3_S experts, int8 KV, MTP `--spec 4 --spec-min-p 0.5`.
-- **Speed (production config):** prompt 968 / 1,714 / 2,041 tok/s at 4K / 32K / 128K, decode 77 / 82 / 76 (E388: the production binary with `--spec 3 --spec-min-p 0.7 --pipeline-windows 2`, no vision encoder; with the encoder loaded 128K is ≈1,950, 4K/32K the same); a real 93K-context session decoded a long reply at 97 tok/s. Decode was 66–75 before.
+- **Production (since 10-10 14:33):** Strata upstream **0.1.42** + 7 local patches (upstream PRs #1149 / #1151 / #1167 + a per-device rocBLAS solution cache) + a modified llama.cpp ggml (MMQ dot-chain heads in the VOP3P encoding on RDNA2), `strata-142-cd87f4d2`. Two-card layer split, IQ3_S experts, int8 KV, MTP `--spec 3 --spec-min-p 0.7 --pipeline-windows 2` (E387) and, new in 0.1.42, `STRATA_SPLIT_MTP_BATCH=1` (E413). The `strata-ud-q4` slot (Unsloth UD-Q4_K_XL) runs the same tree built with `-DSTRATA_MMQ_KQUANTS=ON` since 10-11.
+- **Speed (production config, E415, no vision encoder):** prompt 985 / 1,792 / 2,046 tok/s at 4K / 32K / 128K, decode 77 / 82 / 75 (three rounds in E413b: 1,005 / 1,829 / 2,087). UD-Q4_K_XL on the same split: 756 / 1,748 / 1,981, decode 45–51. Before 0.1.42 + the batched draft K/V: 968 / 1,714 / 2,041. Full eight-arm comparison (both formats, one card and the split, stock and with the PRs) in the community report [Strata PR #1927](https://github.com/Niko1221/Strata/pull/1927).
 - **Whole journey, same IQ3_S model:** decode 26 → 66–75 tok/s (≈2.7×), 37K/50K prompt 274 → ~1,700 tok/s (≈6×). The engine switch (llama.cpp → Strata) is most of it; the patches and configuration after that add about +50% prompt (714 → 1,433 → 1,705 → 1,711) and about +20% decode.
 - **Closed directions (measured; do not retry on this box):** every decode-side configuration knob — `--kv-resident` shrink (E382), `--pipeline-windows 2` alone (E384, +1–6%), the 16-point `--spec` × `--spec-min-p` grid at `--pipeline-windows 1` (E385, 4/0.5 is the peak of accepted tokens per window) — **but the combination works**: `--spec 3 --spec-min-p 0.7 --pipeline-windows 2` decodes +10–16% at 4K and +8–11% at 32K (E387, three confirmation rounds; the short draft is accepted 83% of the time instead of 68%, so the speculative second window hits). Prompt speed unchanged; output differs between starts (the baseline is deterministic); 128K +11% in the no-vision-encoder configuration (E388); in production since 10-09 00:16; batch slots (resident experts 41% < upstream's 50% gate, slots decode without MTP); MMQ tile / stream-K for IQ3_S (E279/E280); `--prefill` chunks other than 8192 (E296); tensor parallel (E234, +6%); and the upstream opt-ins that upstream itself measured as neutral or negative on small cards (chunked GDN, Foresight swap slots, pinned stage buffers).
 - **What is left:** the PCIe topology (x16 + x4 would give ~1.5× on long prompts but breaks RCCL tensor parallel for the dense 27B model on the same box — a trade the owner has not made); and kernel-level work on the prompt side, where expert GEMM, GDN, QSA attention and the hc read each take 10–15% (≤10% each at best).
@@ -68,6 +68,11 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 | 10-08 19:25 | production strata-q8k-4592281: ggml from the modified llama.cpp (MMQ q8_0 / iq3_s dot-chain heads in VOP3P, E378) | iq3_s kernel +2.6% → 32K prompt +1.4–1.5%, outputs byte-identical |
 | 10-08 20:30 | E382 `--kv-resident` 32K → 16K | expert slots only +0.7%, 32K decode −3%, dropped |
 | 10-08 21:25 | **production strata-141-d14ca361**: upstream 0.1.41 + the 7 patches rebased (clean) | 12 outputs byte-identical, speed ±0.5%, 0 stalls; json gets `gpu_order: as_given` |
+| 10-11 01:57 | `strata-ud-q4` slot → 0.1.42 + 7 patches + `-DSTRATA_MMQ_KQUANTS=ON` + `STRATA_SPLIT_MTP_BATCH=1` (E415; community report PR #1927) | split 4K / 32K / 128K 756 / 1,748 / 1,981, decode 45–51 (old slot 715 / 1,640, 43–46); stock 0.1.42 reads both formats at the same speed (one card 471–476 / 504–505 / 488–489: the dense FP16 route is the limit); UD-Q4_K_XL decodes 30–35% slower than IQ3_S |
+| 10-10 23:38 | E414: the llama.cpp RDNA2 MMQ patches inside Strata, one card, UD-Q4_K_XL, against PR #1897 | prompt ±1% with tiles / mad24 and with the Q8_K activations compiled into `strata_mmq` (it never defined `GGML_CUDA_MMQ_Q8K`); Q8_K costs 7% of 8K decode; expert GEMMs are 34% of the prompt (`STRATA_PREFILL_TIMING`), wait-copy 1.6%. Our x8 card: 8K 1,085–1,093 / 16K 1,121–1,122 against #1897's x16 1,036 / 1,104 |
+| 10-10 14:33 | **production → 0.1.42** (`strata-142-cd87f4d2`) + `STRATA_SPLIT_MTP_BATCH=1` (E413/E413b) | 0.1.42 itself byte-identical and speed-neutral against 0.1.41 (fixed protocol); the batched draft K/V: prompt +4.1 / +6.9 / +2.0% at 4K / 32K / 128K over three rounds, decode and acceptance unchanged |
+| 10-10 13:40 | the other 0.1.42 opt-ins, one at a time (E413) | `STRATA_ROUTE_TAIL_SKIP=7` (needs the explicit env on HIP) +4 / +1% decode, within the ±6% run-to-run noise, changes answers; `STRATA_ROUTE_RESIDENT=0.5` hit rate 96→98.7% but decode −1 to −3.5%; `--aux-cpus auto` ±2%; `STRATA_MMQ_RESIDENT_SORT_NE` never eligible here (needs a whole layer resident); `STRATA_PF_FUSED` is gfx11/12 only |
+| 10-09 morning | the K1 flag inventory: 35 switches / settings one at a time (E395–E401) | none beyond noise alone; 17 clearly slower (SPLIT_OWN / no prefill borrow −35% at 32K, `--mtp-window 0` decode −30%); six noise-level ones stacked +1% decode, not measurable in production, archived |
 | 10-09 04:47 | E391–E394: four outside leads, all negative | `--prefill auto:16384` (#1640) 32K −14%; a 4K prompt as two 2,048 chunks (#1441's idea) −9%; #1123's FP32 SGEMM never runs with the FP16 route on, +66/+73% with it off (already measured 10-06 on its predecessor, cited in the PR); phase timing: FP16 twice as fast on hc read and qsa proj, no route merge |
 | 10-09 04:03 | E388a: 0.1.41 one-card / helper arms (completes the report) | one card PRs 976/1,174/1,147, decode 49–51; helper PRs 986/1,173/1,147, decode 72–75; stock +3–6% over 0.1.40.1, switches +5–13%, PRs +1–2%; zero stalls |
 | 10-09 00:16 | **E387 config in production** (`strata-split` / `-256k`: `--spec 3 --spec-min-p 0.7 --pipeline-windows 2`, backups `*.bak-2026-10-09-before-e387`) | one real 7K request through llama-swap: confirm line present, split 0–26/27–47, prompt 1,019, decode 73.4, 92% drafts accepted |
@@ -96,6 +101,8 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 - Expected +10–30% from `--pipeline-windows`; measured +1–6% with non-deterministic output — the estimate ignored that the guess rate is bounded by 2.3 accepted tokens per window.
 - Upgraded to 0.1.39 without checking the old build's local patches one by one; helper decode fell to 39 tok/s (10-04 19:40).
 - Built a comparison tree without diffing CMakeCache and lost a bisection to a missing `STRATA_PREFILL_MMQ=ON` (10-04).
+- Wrote "our ggml patches will help #1897" into a draft comment from the 27B kernel numbers, before measuring them inside Strata; measured, they do nothing there (E414). Measure first, then write.
+- A gh comment was not posted because the leak check `grep -c claude.ai` returns exit 1 on zero matches and cut the `&&` chain; use `! grep -q`.
 
 ## 4. The dense 27B on the same box: Qwen3.8-27B (UD-Q5_K_XL) on llama.cpp, `qwen38-tp`
 
@@ -162,6 +169,6 @@ No block is both large and cheap: MMVQ is at the bandwidth wall, the gaps need f
 - `index.html` — the interactive timeline (speed chart of every production state + every step with reason and effect; Chinese; Flash-Next only).
 - `bench/results/e410`, `e411`, `e412` — the 27B raw material: the P/F cold-start A/B of patch 8 (scripts, report, KLD/perf run), the rocprofv3 decode pies and gap analysis (scripts and their text output; the 300–800 MB trace databases are not included), the old/new short-context check.
 - `bench/run_ab.sh` — A/B skeleton: one cold server per arm, full logs, confirmation lines; `benchmark.py` load generator (4K/32K/128K prompts, fresh nonce each), `ab_compare.py` pairwise text/speed comparison, `monitor_amd.py` telemetry sampler. Paths are placeholders.
-- Upstream community reports from this box: Strata PR #927 and #1270.
+- Upstream community reports from this box: Strata PR #927, #1270, #1657 (0.1.41) and #1927 (0.1.42, UD-Q4_K_XL beside IQ3_S).
 
 Developed with an AI coding assistant; every number here was measured on 2x RX 6900 XT (gfx1030, PCIe 4.0 x8 each) / Ryzen 5 5600X, ROCm 10.0.

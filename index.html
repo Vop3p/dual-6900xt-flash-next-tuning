@@ -79,14 +79,14 @@ code{font-family:var(--f-data);font-size:.92em}
 </header>
 
 <section>
-  <h2>现在（strata-141-d14ca361 + E387 解码配置）</h2>
+  <h2>现在（strata-142-cd87f4d2 + E387 解码配置 + SPLIT_MTP_BATCH）</h2>
   <div class="now">
-    <div><b>968</b><small>4K prompt tok/s（E388）</small></div>
-    <div><b>1,714</b><small>32K prompt tok/s（E388）</small></div>
-    <div><b>2,041</b><small>128K prompt tok/s（E388，无图片编码器；带编码器 ≈1,950）</small></div>
-    <div><b>77 / 82 / 76</b><small>解码 tok/s，4K / 32K / 128K（E388；真实会话 93K 长生成 97）；之前 66–75</small></div>
+    <div><b>985</b><small>4K prompt tok/s（E415）</small></div>
+    <div><b>1,792</b><small>32K prompt tok/s（E415；三轮均值 1,829）</small></div>
+    <div><b>2,046</b><small>128K prompt tok/s（E415，无图片编码器）</small></div>
+    <div><b>77 / 82 / 75</b><small>解码 tok/s，4K / 32K / 128K（E415；真实会话 138K 上下文 78）；之前 66–75</small></div>
   </div>
-  <p class="foot">生产 = Strata 上游 0.1.41 + 7 个本地补丁（PR #1149 / #1151 / #1167 + rocBLAS 解的本机缓存）+ 自改的 llama.cpp ggml（MMQ 的 q8_0 / iq3_s dot 链头用 VOP3P 编码）。</p>
+  <p class="foot">生产 = Strata 上游 0.1.42 + STRATA_SPLIT_MTP_BATCH=1 + 7 个本地补丁（PR #1149 / #1151 / #1167 + rocBLAS 解的本机缓存）+ 自改的 llama.cpp ggml（MMQ 的 q8_0 / iq3_s dot 链头用 VOP3P 编码）。</p>
 </section>
 
 <section>
@@ -98,7 +98,7 @@ code{font-family:var(--f-data);font-size:.92em}
     <span><i class="dot" style="background:var(--l-decode)"></i>解码（tok/s，右轴）</span>
   </div>
   <div class="panel"><div class="chart" id="speed"></div>
-  <p class="foot">各点来自不同实验，条件不完全相同：4K 线的前两点是 5K prompt（E215），238abe8 / 341922e 的 4K 来自两份社区报告的 split 臂；最后一点的 prompt 三档取 E383/E387 的生产臂（解码配置不改 prompt，E388 ±0.7%）；llama.cpp 和 132a522 是 37K（E215）；0.1.39 和 238abe8 来自 10-05 社区报告，当时自适应关着；61c59fa 只测了 128K（E300）；341922e 来自 E342；10-07 起的点来自 E362 / E380 / E382 / E383 的 P 臂（生产配置、图片编码器在 HIP0）。空心点表示那一步没测这个指标。</p></div>
+  <p class="foot">各点来自不同实验，条件不完全相同：4K 线的前两点是 5K prompt（E215），238abe8 / 341922e 的 4K 来自两份社区报告的 split 臂；最后一点的 prompt 三档取 E383/E387 的生产臂（解码配置不改 prompt，E388 ±0.7%）；llama.cpp 和 132a522 是 37K（E215）；0.1.39 和 238abe8 来自 10-05 社区报告，当时自适应关着；61c59fa 只测了 128K（E300）；341922e 来自 E342；10-07 起的点来自 E362 / E380 / E382 / E383 的 P 臂（生产配置、图片编码器在 HIP0）；最后一点是 E415（社区报告 #1927 的 iq3s-split-prs 臂，无图片编码器）。空心点表示那一步没测这个指标。</p></div>
 </section>
 
 <section>
@@ -126,11 +126,12 @@ code{font-family:var(--f-data);font-size:.92em}
     <li><b>并发批槽：</b>常驻专家 41% 低于上游门槛 50%，槽里不带 MTP，2 路并发总吞吐不如单路（上游表）。</li>
     <li><b>IQ3_S 的 MMQ 分块 / stream-K</b>（E279/E280）、<code>--prefill</code> chunk 8192 即甜点（E296）、张量并行（E234，+6%）。</li>
     <li><b>上游自己测过对小卡无益：</b>GDN 分块（需 128 SM）、Foresight 交换槽（解码变慢）、STAGE_PIN（IQ3_S 损坏，改回 opt-in）。</li>
+    <li><b>0.1.42 的 opt-in（E413）和把 llama.cpp MMQ 补丁带进 Strata（E414）：</b>只有 <code>STRATA_SPLIT_MTP_BATCH=1</code> 过线（已上生产）；TAIL_SKIP / ROUTE_RESIDENT / aux-cpus 在噪声内或更慢，RESIDENT_SORT / PF_FUSED 本机不触发；ggml 补丁在 Strata 的专家 GEMM 上 ±1%。</li>
     <li><b>还有空间的只剩：</b>PCIe 拓扑 x16+x4（大 prompt 约 1.5×，代价是 27B 的张量并行会崩，用户定）；prompt 侧专家 GEMM / GDN / QSA / hc 读各 10–15%，都是内核级工作。</li>
   </ul>
 </section>
 
-<p class="foot">数据：实验编号（E…）对应作者的实验日志（见本仓库 README）；Strata 上游 bench/results 里的 2026-10-05 / 2026-10-06 社区报告（PR #927 / #1270）。Developed with an AI coding assistant; every number above was measured on 2x RX 6900 XT (gfx1030, PCIe 4.0 x8 each) / Ryzen 5 5600X, ROCm 10.0.</p>
+<p class="foot">数据：实验编号（E…）对应作者的实验日志（见本仓库 README）；Strata 上游 bench/results 里的社区报告（PR #927 / #1270 / #1657 / #1927）。Developed with an AI coding assistant; every number above was measured on 2x RX 6900 XT (gfx1030, PCIe 4.0 x8 each) / Ryzen 5 5600X, ROCm 10.0.</p>
 </div>
 
 <script>
@@ -149,6 +150,7 @@ const M=[
   {k:'q8k ggml\n10-08',p4:975,p32:1711,p128:1957,d:74.3},
   {k:'0.1.41\n10-08',p4:961,p32:1710,p128:1950,d:74.2},
   {k:'spec3/0.7+win2\n10-09',p4:961,p32:1710,p128:1950,d:82.2},
+  {k:'0.1.42+MTP batch\n10-10',p4:985,p32:1792,p128:2046,d:81.9},
 ];
 (function(){
   const W=860,H=372,L=56,R=60,T=16,B=84;
@@ -236,6 +238,11 @@ const S=[
  ['10-08','21:50','drop','--spec × --spec-min-p 16 点网格（E385/E385b）','每窗 33 ms 固定，速度取决于每窗接受数',[['只有 5/0.6 在 32K +2.5%（单轮）','flat'],['其余全负，4/0.5 是峰值','down']]],
  ['10-08','23:42','decode','--spec 3 --spec-min-p 0.7 + --pipeline-windows 2（E387）','E384/E385 各自单变量都否定了，但短草稿几乎全接受（83% vs 68%）时，第二窗的推测才命中——两个旋钮有交互',[['解码 4K +10~16%、32K +8~11%，三轮确认','up'],['prompt 不变；输出跨启动不确定（基线是确定的）；128K 无编码器配置下 +11%（E388）；10-09 00:16 上生产','flat']]],
  ['10-08','22:50','drop','并发批槽（--batch N，0.1.41 的 batch-groups auto）','两卡流水能不能提总吞吐',[['常驻专家 41% < 门槛 50%；槽里不带 MTP','down'],['单人使用无意义，不测','flat']]],
+ ['10-09','上午','drop','flag 清单 K1：35 个开关/档位逐个单变量（E395–E401）','把上游 Strix Halo / CUDA 上有效的内核族开关、借槽、缓存、放置、草稿开关在本机各测一遍',[['单独没有一个超过噪声；17 个明确变慢（SPLIT_OWN / no-prefill-borrow 32K −35%）','down'],['六个噪声内的叠加解码 +1%，生产里测不出，归档','flat']]],
+ ['10-10','13:40','drop','0.1.42 其余 opt-in（E413）','TAIL_SKIP=7 / ROUTE_RESIDENT / aux-cpus / RESIDENT_SORT / PF_FUSED 逐个单变量',[['TAIL_SKIP +4/+1% 在 ±6% 噪声内且改答案；ROUTE_RESIDENT 命中 98.7% 却慢 1~3.5%','down'],['RESIDENT_SORT 要整层全常驻、PF_FUSED 只有 gfx11/12：本机空操作','flat']]],
+ ['10-10','14:33','prompt','生产升 0.1.42 + STRATA_SPLIT_MTP_BATCH=1（strata-142-cd87f4d2，E413）','分层时草稿层的 prompt K/V 改走 prompt 路径的 MMQ，不再每 8 行一次小批',[['prompt +4.1 / +6.9 / +2.0%（4K/32K/128K，三轮同向），解码与接受率不变','up'],['0.1.42 本身与 0.1.41 固定协议下逐字相同、速度持平','flat']]],
+ ['10-10','23:38','drop','llama.cpp RDNA2 MMQ 补丁放进 Strata（E414，对照 PR #1897）','27B 上值 +5~11% 的补丁能否帮 Strata 的 UD-Q4 专家 GEMM',[['prompt ±1%；Q8_K 激活版 8K 解码 −7%','down'],['专家 GEMM 只占 prompt 34%、行数形状不同；strata_mmq 本来就没编 Q8K 宏','flat']]],
+ ['10-11','01:57','engine','strata-ud-q4 槽升 0.1.42 + KQUANTS + SPLIT_MTP_BATCH（E415，社区报告 #1927）','IQ3_S 与 UD-Q4_K_XL × 单卡/分层 × 原版/PR 八臂',[['UD-Q4 分层 756 / 1,748 / 1,981，解码 45~51（旧槽 715 / 1,640，43~46）','up'],['原版 prompt 两格式相同（稠密 FP16 路径是上限）；UD-Q4 解码比 IQ3_S 慢 30~35%','flat']]],
 ];
 const on=new Set(Object.keys(LANES));
 const F=document.getElementById('filters');

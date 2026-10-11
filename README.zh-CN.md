@@ -11,7 +11,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/speed-chart-dark.png">
-  <img alt="Prompt and decode speed, step by step, llama.cpp 10-02 to Strata 0.1.41 10-08" src="docs/speed-chart-light.png" width="100%">
+  <img alt="Prompt and decode speed, step by step, llama.cpp 10-02 to Strata 0.1.42 10-10" src="docs/speed-chart-light.png" width="100%">
 </picture>
 
 *各生产状态的读 prompt（4K、32K–37K、128K，左轴）和解码（右轴）tok/s。各点来自不同实验、条件不完全相同（前两步的 4K 点是 5K prompt；其余见交互页图下说明）；虚线段表示那一步没测这个指标。*
@@ -44,8 +44,8 @@ AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，
 
 ## 0. 结论（先看这里）
 
-- **生产（10-09 00:16 起，解码配置换 E387；二进制 10-08 21:25 起）**：llama-swap `strata-split` / `strata-split-256k` = `strata-141-d14ca361`（Strata 上游 0.1.41 + 我们 7 个补丁 + llama-q2k 的 ggml）。回退槽 `strata-split-prev` = strata-q8k-4592281。
-- **现在的速度**（E383/E385 的 P 臂，生产配置）：prompt 4K 968、32K 1,714、128K 2,041 tok/s，解码 77 / 82 / 76（E388，生产二进制 + `--spec 3 --spec-min-p 0.7 --pipeline-windows 2`，无图片编码器；生产带编码器时 128K ≈1,950，4K/32K 相同）；真实会话 93K 上下文长生成 97 tok/s。之前解码 66–75。
+- **生产（10-10 14:33 起）**：llama-swap `strata-split` / `strata-split-256k` = `strata-142-cd87f4d2`（Strata 上游 **0.1.42** + 我们 7 个补丁 + llama-q2k 的 ggml），解码配置 `--spec 3 --spec-min-p 0.7 --pipeline-windows 2`（E387），加 0.1.42 新开关 `STRATA_SPLIT_MTP_BATCH=1`（E413）。回退槽 `strata-split-prev` = strata-141-d14ca361。`strata-ud-q4`（Unsloth UD-Q4_K_XL）10-11 起用同一源码加 `-DSTRATA_MMQ_KQUANTS=ON`。
+- **现在的速度**（E415，生产配置，无图片编码器）：prompt 4K 985、32K 1,792、128K 2,046 tok/s，解码 77 / 82 / 75（E413b 三轮均值 1,005 / 1,829 / 2,087）；同样分层跑 UD-Q4_K_XL 756 / 1,748 / 1,981，解码 45–51。0.1.42 + 草稿 K/V 批量化之前是 968 / 1,714 / 2,041。两种格式 × 单卡/分层 × 原版/PR 的八臂对比见社区报告 [Strata PR #1927](https://github.com/Niko1221/Strata/pull/1927)。
 - **从 llama.cpp 到 Strata 的总账**（同一份 IQ3_S）：解码 26 → 66–75 tok/s（≈2.7×），37K/50K prompt 274 → 1,700（≈6×）。其中 Strata 本身换引擎占大头，之后我们的补丁和配置累计 prompt 约 +50%（714 → 1,433 → 1,705 → 1,711），解码约 +20%。
 - **已经到地板的（别再试）**：解码的配置级杠杆**单独调**全部否定——`--kv-resident` 缩小（E382）、单开 `--pipeline-windows 2`（E384，+1–6%）、pipeline-windows 1 下的 `--spec`/`--spec-min-p` 16 点网格（E385/b，4/0.5 是峰值）；**但组合有效**：`--spec 3 --spec-min-p 0.7 --pipeline-windows 2` 解码 4K +10–16%、32K +8–11%（E387，三轮确认；短草稿接受率 83% vs 68%，第二窗的推测才命中），prompt 不变，输出跨启动不确定（基线是确定的），128K 在无编码器配置下 +11%（E388）；10-09 00:16 上生产；并发批槽对这台机器无益（常驻专家 41% < 上游门槛 50%，槽里不带 MTP）；IQ3_S 的 MMQ 分块/stream-K（E279/E280）；`--prefill` chunk 8192 即甜点（E296）；上游的 GDN 分块、Foresight、STAGE_PIN（上游自测对小卡无益或有害）。
 - **还有空间的**：PCIe 拓扑换 x16+x4（大 prompt 约 1.5×，但 27B 的张量并行会崩，二选一，由用户定）；prompt 侧专家 GEMM / GDN / QSA 注意力 / hc 读各占 10–15%，每项都是内核级工作，≤10%。
@@ -81,6 +81,11 @@ AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，
 | 10-08 19:25 | 生产 strata-q8k-4592281：ggml 换 llama-q2k（MMQ q8_0/iq3_s 链头 VOP3P，E378） | iq3_s 内核 +2.6% → 32K prompt +1.4–1.5%，输出逐字相同 |
 | 10-08 20:30 | E382 `--kv-resident` 32K → 16K | 专家槽只 +0.7%，32K 解码 −3%，否决 |
 | 10-08 21:25 | **生产 strata-141-d14ca361**：上游 0.1.41 + 7 补丁 rebase（无冲突） | 12 条输出逐字相同、速度 ±0.5%、0 停转；json 加 `gpu_order: as_given` |
+| 10-11 01:57 | `strata-ud-q4` 槽 → 0.1.42 + 7 补丁 + `-DSTRATA_MMQ_KQUANTS=ON` + `STRATA_SPLIT_MTP_BATCH=1`（E415；社区报告 PR #1927） | 分层 4K / 32K / 128K 756 / 1,748 / 1,981，解码 45–51（旧槽 715 / 1,640，43–46）；原版 0.1.42 两种格式 prompt 一样（单卡 471–476 / 504–505 / 488–489：稠密 FP16 路径是上限）；UD-Q4 解码比 IQ3_S 慢 30–35% |
+| 10-10 23:38 | E414：llama.cpp 的 RDNA2 MMQ 补丁放进 Strata，单卡 UD-Q4，对照 PR #1897 | tile / mad24、以及把 Q8_K 激活编进 `strata_mmq`（它原本就没定义 `GGML_CUDA_MMQ_Q8K`）都只有 prompt ±1%；Q8_K 让 8K 解码 −7%；专家 GEMM 只占 prompt 34%，等拷贝 1.6%。我们 x8 单卡 8K 1,085–1,093 / 16K 1,121–1,122，#1897 的 x16 是 1,036 / 1,104 |
+| 10-10 14:33 | **生产升 0.1.42**（`strata-142-cd87f4d2`）+ `STRATA_SPLIT_MTP_BATCH=1`（E413/E413b） | 0.1.42 本身与 0.1.41 固定协议下逐字相同、速度持平；草稿 K/V 批量化：prompt +4.1 / +6.9 / +2.0%（4K/32K/128K，三轮同向），解码与接受率不变 |
+| 10-10 13:40 | 0.1.42 其余 opt-in 逐个单变量（E413） | `STRATA_ROUTE_TAIL_SKIP=7`（HIP 要显式设）解码 +4 / +1%，在 ±6% 轮间噪声内且改答案；`STRATA_ROUTE_RESIDENT=0.5` 命中 96→98.7% 但解码 −1~−3.5%；`--aux-cpus auto` ±2%；`STRATA_MMQ_RESIDENT_SORT_NE` 要整层专家全常驻，本机永不触发；`STRATA_PF_FUSED` 只有 gfx11/12 |
+| 10-09 上午 | flag 清单 K1：35 个开关/档位逐个单变量（E395–E401） | 单独没有一个超过噪声；17 个明确变慢（SPLIT_OWN / no-prefill-borrow 32K −35%，`--mtp-window 0` 解码 −30%）；六个噪声内的叠加解码 +1%，生产里测不出，归档 |
 | 10-09 04:47 | E391–E394：四条外来线索全部否定 | `--prefill auto:16384`（#1640）32K −14%；短 prompt 切 2048（#1441 思路）4K −9%；#1123 FP32 SGEMM 在 F16 开着时零调用、F16 关时 +66/+73%（10-06 已测过同款，正文已引用）；相位计时 F16 在 hc/qsa proj 都快一倍，不合并 |
 | 10-09 04:03 | E388a 0.1.41 单卡 / helper 六臂（补齐报告） | 单卡 PRs 976/1,174/1,147、解码 49–51；helper PRs 986/1,173/1,147、解码 72–75；stock 比 0.1.40.1 +3–6%，两开关 +5–13%，PRs +1–2%；0 停转 |
 | 10-09 00:16 | **E387 配置上生产**（strata-split / -256k：`--spec 3 --spec-min-p 0.7 --pipeline-windows 2`，备份 *.bak-2026-10-09-before-e387） | 经 llama-swap 实发 7K 请求：确认行出现，分层 0–26/27–47，prompt 1,019、解码 73.4，草稿接受 92% |
@@ -109,6 +114,8 @@ AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，
 - 对 `--pipeline-windows` 预期 +10–30%，实测 +1–6% 且输出不确定；预期是按"省掉一段"算的，没考虑猜中率受每窗 2.3 token 限制。
 - 升级前没逐条核对旧版本地补丁，0.1.39 升级后 helper 掉到 39 t/s（10-04 19:40）。
 - 新建对比构建没 diff CMakeCache，漏了 STRATA_PREFILL_MMQ=ON 导致二分作废（10-04）。
+- 凭 27B 上的内核数字，在评论草稿里先写了"我们的 ggml 补丁能帮 #1897"，之后才在 Strata 里测——实测无效（E414）。先测再写。
+- 一条 gh 评论没发出去：泄露检查 `grep -c claude.ai` 匹配 0 时退出码是 1，截断了 `&&` 链；应写 `! grep -q`。
 
 ## 4. 同一台机器上的稠密 27B：Qwen3.8-27B（UD-Q5_K_XL），llama.cpp `qwen38-tp`
 
