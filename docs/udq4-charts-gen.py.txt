@@ -1,0 +1,45 @@
+# UD-Q4_K_XL vs IQ3_S on 0.1.42 (E415): one chart, en/zh x light/dark
+import os, asyncio
+OUT="docs"; HERE=os.path.dirname(os.path.abspath(__file__))
+CSS=""":root{--bg:#f5f6f4;--panel:#fff;--ink:#1b2321;--muted:#5d6966;--rule:#d9dedb;--iq:#2f7a8c;--ud:#b8691c;
+--f-display:"Noto Serif SC",serif;--f-body:"Noto Sans SC",system-ui,sans-serif;--f-data:"IBM Plex Mono",monospace}
+:root[data-theme="dark"]{--bg:#121816;--panel:#1a2220;--ink:#e4ebe8;--muted:#9aa8a4;--rule:#2c3633;--iq:#5fb3c6;--ud:#e09a4f}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5}
+.fig{width:1100px;box-sizing:border-box;padding:16px}h2{font-family:var(--f-display);font-size:21px;margin:0 0 10px}
+.legend{display:flex;gap:18px;font-size:13px;color:var(--muted);margin-bottom:8px}.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;background:var(--c)}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:14px 16px}
+table{width:100%;border-collapse:collapse}td{padding:5px 6px;vertical-align:middle}th{font-weight:500;color:var(--muted);font-size:12.5px;text-align:left;padding:0 6px 6px}
+.cfg{width:210px;font-size:13.5px}.cfg small{display:block;color:var(--muted);font-size:12px}
+.bar{position:relative;height:16px;margin:3px 0}.bar i{display:block;height:100%;border-radius:2px;background:var(--c)}
+.bar b{position:absolute;top:-2px;font-family:var(--f-data);font-weight:400;font-size:12.5px;white-space:nowrap}
+tr.sep td{border-top:1px solid var(--rule)}
+.note{color:var(--muted);font-size:13px;margin-top:10px}"""
+# config: [32K prompt, decode32K, 4K/128K prompt text]
+D=[('one card','单卡','stock 0.1.42','原版 0.1.42',(504,47.1,'476 / 488'),(505,31.3,'471 / 489')),
+   ('one card','单卡','+ PRs + switches','+ PR + 开关',(1153,52.5,'959 / 1,129'),(1117,32.6,'676 / 1,087')),
+   ('layer split','双卡分层','stock 0.1.42','原版 0.1.42',(766,72.4,'464 / 873'),(763,45.6,'462 / 873')),
+   ('layer split','双卡分层','+ PRs + switches (production)','+ PR + 开关（生产）',(1792,81.9,'985 / 2,046'),(1748,51.1,'756 / 1,981'))]
+def bar(v,mx,col,lab,k=0.78): w=v/mx*100*k; return f'<div class="bar" style="--c:var({col})"><i style="width:{w:.1f}%"></i><b style="left:{w+1.5:.1f}%">{lab}</b></div>'
+def page(lang,theme):
+    zh=lang=='zh'; rows=''
+    for i,(c_en,c_zh,s_en,s_zh,iq,ud) in enumerate(D):
+        rows+=f'<tr class="{"sep" if i else ""}"><td class="cfg">{c_zh if zh else c_en}<small>{s_zh if zh else s_en}</small></td>'
+        rows+='<td>'+bar(iq[0],1850,'--iq',f'{iq[0]:,}  (4K / 128K {iq[2]})',0.5)+bar(ud[0],1850,'--ud',f'{ud[0]:,}  (4K / 128K {ud[2]})',0.5)+'</td>'
+        rows+='<td>'+bar(iq[1],85,'--iq',f'{iq[1]}')+bar(ud[1],85,'--ud',f'{ud[1]}')+'</td></tr>'
+    h=('Unsloth UD-Q4_K_XL beside GSQ-RCO IQ3_S, Strata 0.1.42 (E415)' if not zh else 'Unsloth UD-Q4_K_XL 对比 GSQ-RCO IQ3_S，Strata 0.1.42（E415）')
+    th=('<th></th><th>prompt tok/s at 32K</th><th style="width:300px">decode tok/s at 32K</th>' if not zh else '<th></th><th>32K prompt tok/s</th><th style="width:300px">32K 解码 tok/s</th>')
+    note=('Same machine, same script, no vision encoder, 256-token outputs, median of two runs; the PRs arms build with -DSTRATA_MMQ_KQUANTS=ON. Stock reads both formats at the same speed (the dense FP16 route is the limit); with the PRs the prompts are within 3% at 32K / 128K, 23–30% apart at 4K; UD-Q4_K_XL decodes 34–38% slower (experts 53% larger, about 40% fewer cache slots). Full data: Strata PR #1927.' if not zh else
+          '同一台机器、同一脚本，无图片编码器，输出 256 token，两轮中位；PR 臂编译带 -DSTRATA_MMQ_KQUANTS=ON。原版两种格式 prompt 一样（稠密 FP16 路径是上限）；加 PR 后 32K / 128K 相差 3% 以内，4K 差 23–30%；UD-Q4 解码慢 34–38%（专家大 53%，缓存槽少约 40%）。完整数据见 Strata PR #1927。')
+    leg=f'<div class="legend"><span style="--c:var(--iq)">IQ3_S</span><span style="--c:var(--ud)">UD-Q4_K_XL</span></div>'
+    return f'''<!doctype html><html lang="{lang}" data-theme="{theme}"><head><meta charset="utf-8"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500&family=Noto+Serif+SC:wght@600&family=IBM+Plex+Mono&display=swap"><style>{CSS}</style></head><body><div class="fig" id="f"><h2>{h}</h2>{leg}<div class="panel"><table><tr>{th}</tr>{rows}</table></div><div class="note">{note}</div></div></body></html>'''
+async def main():
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        b=await p.chromium.launch(); pg=await (await b.new_context(viewport={"width":1100,"height":900},device_scale_factor=2)).new_page()
+        for lang in ('en','zh'):
+            for theme in ('light','dark'):
+                f=os.path.join(HERE,f'{lang}-{theme}.html'); open(f,'w').write(page(lang,theme))
+                await pg.goto('file://'+f,wait_until='networkidle'); await pg.evaluate('document.fonts.ready'); await pg.wait_for_timeout(300)
+                await (await pg.query_selector('#f')).screenshot(path=f'{OUT}/udq4-vs-iq3s-{lang}-{theme}.png'); print('wrote',lang,theme)
+        await b.close()
+asyncio.run(main())

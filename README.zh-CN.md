@@ -42,10 +42,17 @@ Developed with an AI coding assistant; every number here was measured on the mac
 AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，ROCm 10.0。模型 Qwen3.8-Flash-Next（GSQ-RCO IQ3_S 为主）。
 实验编号（E…）对应作者的实验日志（未公开）；每条数字都是本机实测，推算的单独标明。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/udq4-vs-iq3s-zh-dark.png">
+  <img alt="0.1.42 上 UD-Q4_K_XL 与 IQ3_S：单卡与双卡分层、原版与 PR，32K prompt 与解码" src="docs/udq4-vs-iq3s-zh-light.png" width="100%">
+</picture>
+
+*UD-Q4_K_XL 对比 IQ3_S（E415，0.1.42，无图片编码器，每格两轮，0 停转）。**单卡**：原版 UD-Q4 4K / 32K / 128K 为 471 / 505 / 489 tok/s，IQ3_S 为 476 / 504 / 488，解码 30–32 对 45–47；加 PR 和开关后 676 / 1,117 / 1,087 对 959 / 1,153 / 1,129，解码 32–33 对 47–53。按 #1897 的开关（加 `STRATA_ROUTE_TAIL_SKIP=7`），单卡 UD-Q4 在这条 x8 链路上 8K 1,085–1,093、16K 1,121–1,122 tok/s，解码 39–40，三次冷启动（E414；#1897 的 x16 卡是 1,036 / 1,104，解码 32–38）。**双卡分层**见图。原始数据：`bench/results/e414`、`e415`，以及 Strata PR #1927。*
+
 ## 0. 结论（先看这里）
 
 - **生产（10-10 14:33 起）**：llama-swap `strata-split` / `strata-split-256k` = `strata-142-cd87f4d2`（Strata 上游 **0.1.42** + 我们 7 个补丁 + llama-q2k 的 ggml），解码配置 `--spec 3 --spec-min-p 0.7 --pipeline-windows 2`（E387），加 0.1.42 新开关 `STRATA_SPLIT_MTP_BATCH=1`（E413）。回退槽 `strata-split-prev` = strata-141-d14ca361。`strata-ud-q4`（Unsloth UD-Q4_K_XL）10-11 起用同一源码加 `-DSTRATA_MMQ_KQUANTS=ON`。
-- **现在的速度**（E415，生产配置，无图片编码器）：prompt 4K 985、32K 1,792、128K 2,046 tok/s，解码 77 / 82 / 75（E413b 三轮均值 1,005 / 1,829 / 2,087）；同样分层跑 UD-Q4_K_XL 756 / 1,748 / 1,981，解码 45–51。0.1.42 + 草稿 K/V 批量化之前是 968 / 1,714 / 2,041。两种格式 × 单卡/分层 × 原版/PR 的八臂对比见社区报告 [Strata PR #1927](https://github.com/Niko1221/Strata/pull/1927)。
+- **现在的速度**（E415，生产配置，无图片编码器）：prompt 4K 985、32K 1,792、128K 2,046 tok/s，解码 77 / 82 / 75（E413b 三轮均值 1,005 / 1,829 / 2,087）；同样分层跑 UD-Q4_K_XL 756 / 1,748 / 1,981，解码 45–51；单卡 UD-Q4 676 / 1,117 / 1,087，解码 32–33（单卡 IQ3_S 959 / 1,153 / 1,129，解码 47–53）。0.1.42 + 草稿 K/V 批量化之前是 968 / 1,714 / 2,041。两种格式 × 单卡/分层 × 原版/PR 的八臂对比见社区报告 [Strata PR #1927](https://github.com/Niko1221/Strata/pull/1927)。
 - **从 llama.cpp 到 Strata 的总账**（同一份 IQ3_S）：解码 26 → 66–75 tok/s（≈2.7×），37K/50K prompt 274 → 1,700（≈6×）。其中 Strata 本身换引擎占大头，之后我们的补丁和配置累计 prompt 约 +50%（714 → 1,433 → 1,705 → 1,711），解码约 +20%。
 - **已经到地板的（别再试）**：解码的配置级杠杆**单独调**全部否定——`--kv-resident` 缩小（E382）、单开 `--pipeline-windows 2`（E384，+1–6%）、pipeline-windows 1 下的 `--spec`/`--spec-min-p` 16 点网格（E385/b，4/0.5 是峰值）；**但组合有效**：`--spec 3 --spec-min-p 0.7 --pipeline-windows 2` 解码 4K +10–16%、32K +8–11%（E387，三轮确认；短草稿接受率 83% vs 68%，第二窗的推测才命中），prompt 不变，输出跨启动不确定（基线是确定的），128K 在无编码器配置下 +11%（E388）；10-09 00:16 上生产；并发批槽对这台机器无益（常驻专家 41% < 上游门槛 50%，槽里不带 MTP）；IQ3_S 的 MMQ 分块/stream-K（E279/E280）；`--prefill` chunk 8192 即甜点（E296）；上游的 GDN 分块、Foresight、STAGE_PIN（上游自测对小卡无益或有害）。
 - **还有空间的**：PCIe 拓扑换 x16+x4（大 prompt 约 1.5×，但 27B 的张量并行会崩，二选一，由用户定）；prompt 侧专家 GEMM / GDN / QSA 注意力 / hc 读各占 10–15%，每项都是内核级工作，≤10%。
