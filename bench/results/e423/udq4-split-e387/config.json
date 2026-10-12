@@ -1,0 +1,61 @@
+{
+  "exe": "/home/ian/prod-bin/strata-142-kq-cd87f4d2/strata-engine",
+  "args": [
+    "--pack",
+    "/home/ian/Strata-data/packs/ud-q4_k_xl",
+    "--native",
+    "/home/ian/flash-next/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf",
+    "--expert-profile",
+    "/home/ian/prod-bin/strata-142-kq-cd87f4d2/expert-profile.bin",
+    "--expert-cache",
+    "auto",
+    "--prefill",
+    "auto",
+    "--spec",
+    "3",
+    "--spec-min-p",
+    "0.7",
+    "--mtp",
+    "/home/ian/Strata-data/mtp/rt",
+    "--max-context",
+    "131072",
+    "--kv",
+    "int8",
+    "--kv-resident",
+    "32768",
+    "--ple-io",
+    "direct",
+    "--vram-reserve-mib",
+    "700",
+    "--pipeline-windows",
+    "2"
+  ],
+  "cwd": "/home/ian/prod-bin/strata-142-kq-cd87f4d2",
+  "tokenizer": "/home/ian/Strata-data/packs/ud-q4_k_xl/tokenizer",
+  "model_name": "strata-ud-q4",
+  "log": "/home/ian/notes/bench/e423/P/engine.log",
+  "lib_dirs": [
+    "/opt/rocm/lib"
+  ],
+  "port": 8080,
+  "backend": "hip",
+  "gpu": [
+    1,
+    0
+  ],
+  "gpus_asked": true,
+  "layer_split": "auto",
+  "env": {
+    "STRATA_ROCBLAS_TUNING": "/home/ian/prod-bin/strata-142-kq-cd87f4d2/tools/hip",
+    "STRATA_IO_THREADS": "128",
+    "STRATA_SELECT_SGEMM": "1",
+    "STRATA_SELECT_SGEMM_VERBOSE": "1",
+    "STRATA_SH_STREAM": "1",
+    "STRATA_HIP_PROMPT_F16": "1",
+    "STRATA_HIP_ADAPT_KERNEL_COPY": "1",
+    "STRATA_PREFILL_CPU_SHARE": "auto",
+    "STRATA_TUNING_CACHE": "/home/ian/.cache/strata",
+    "STRATA_SPLIT_MTP_BATCH": "1"
+  },
+  "gpu_order": "as_given"
+}

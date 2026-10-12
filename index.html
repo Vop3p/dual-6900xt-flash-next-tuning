@@ -242,6 +242,7 @@ const S=[
  ['10-10','13:40','drop','0.1.42 其余 opt-in（E413）','TAIL_SKIP=7 / ROUTE_RESIDENT / aux-cpus / RESIDENT_SORT / PF_FUSED 逐个单变量',[['TAIL_SKIP +4/+1% 在 ±6% 噪声内且改答案；ROUTE_RESIDENT 命中 98.7% 却慢 1~3.5%','down'],['RESIDENT_SORT 要整层全常驻、PF_FUSED 只有 gfx11/12：本机空操作','flat']]],
  ['10-10','14:33','prompt','生产升 0.1.42 + STRATA_SPLIT_MTP_BATCH=1（strata-142-cd87f4d2，E413）','分层时草稿层的 prompt K/V 改走 prompt 路径的 MMQ，不再每 8 行一次小批',[['prompt +4.1 / +6.9 / +2.0%（4K/32K/128K，三轮同向），解码与接受率不变','up'],['0.1.42 本身与 0.1.41 固定协议下逐字相同、速度持平','flat']]],
  ['10-10','23:38','drop','llama.cpp RDNA2 MMQ 补丁放进 Strata（E414，对照 PR #1897）','27B 上值 +5~11% 的补丁能否帮 Strata 的 UD-Q4 专家 GEMM',[['prompt ±1%；Q8_K 激活版 8K 解码 −7%','down'],['专家 GEMM 只占 prompt 34%、行数形状不同；strata_mmq 本来就没编 Q8K 宏','flat']]],
+ ['10-12','02:00','decode','strata-ud-q4 补上 E387 解码配置（E422/E423）','E387 上线时只改了 IQ3_S 两个槽；同一机制在 UD-Q4 上是否成立',[['解码 4K / 32K / 128K +13.5 / +9.6 / +5.2%','up'],['prompt −0.3%，草稿接受 66 → 79%','flat']]],
  ['10-11','01:57','engine','strata-ud-q4 槽升 0.1.42 + KQUANTS + SPLIT_MTP_BATCH（E415，社区报告 #1927）','IQ3_S 与 UD-Q4_K_XL × 单卡/分层 × 原版/PR 八臂',[['UD-Q4 分层 756 / 1,748 / 1,981，解码 45~51（旧槽 715 / 1,640，43~46）','up'],['原版 prompt 两格式相同（稠密 FP16 路径是上限）；UD-Q4 解码比 IQ3_S 慢 30~35%','flat']]],
 ];
 const on=new Set(Object.keys(LANES));
