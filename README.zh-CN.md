@@ -51,11 +51,45 @@ AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，
 
 ## 0. 结论（先看这里）
 
-- **生产（10-10 14:33 起）**：llama-swap `strata-split` / `strata-split-256k` = `strata-142-cd87f4d2`（Strata 上游 **0.1.42** + 我们 7 个补丁 + llama-q2k 的 ggml），解码配置 `--spec 3 --spec-min-p 0.7 --pipeline-windows 2`（E387），加 0.1.42 新开关 `STRATA_SPLIT_MTP_BATCH=1`（E413）。回退槽 `strata-split-prev` = strata-141-d14ca361。`strata-ud-q4`（Unsloth UD-Q4_K_XL）10-11 起用同一源码加 `-DSTRATA_MMQ_KQUANTS=ON`，10-12 起解码配置也相同（E422/E423）。
-- **现在的速度**（E415，生产配置，无图片编码器）：prompt 4K 985、32K 1,792、128K 2,046 tok/s，解码 77 / 82 / 75（E413b 三轮均值 1,005 / 1,829 / 2,087）；同样分层、同样解码配置跑 UD-Q4_K_XL（E423，两次冷启动）748 / 1,738 / 1,976，解码 51 / 52 / 50（旧的 `--spec 4 --spec-min-p 0.5` 为 750 / 1,748 / 1,986，解码 45 / 48 / 48）；单卡 UD-Q4 676 / 1,117 / 1,087，解码 32–33（单卡 IQ3_S 959 / 1,153 / 1,129，解码 47–53）。0.1.42 + 草稿 K/V 批量化之前是 968 / 1,714 / 2,041。两种格式 × 单卡/分层 × 原版/PR 的八臂对比见社区报告 [Strata PR #1927](https://github.com/Niko1221/Strata/pull/1927)。
+- **生产（10-12 22:02 起）**：llama-swap `strata-split` / `strata-split-256k` = `strata-142-hcpa-2712fb13`（Strata 上游 **0.1.42** + 我们 7 个补丁 + 验证器 hc 读常驻内核 [#2226](https://github.com/Niko1221/Strata/pull/2226)，`STRATA_HC_PERSIST=1`，E427/E439 + llama-q2k 的 ggml），解码配置 `--spec 3 --spec-min-p 0.7 --pipeline-windows 2`（E387），加 `STRATA_SPLIT_MTP_BATCH=1`（E413）。回退槽 `strata-split-prev` = strata-142-hcp-78a7bebf。`strata-ud-q4`（Unsloth UD-Q4_K_XL）用同一源码加 `-DSTRATA_MMQ_KQUANTS=ON`，解码配置相同。上游 0.1.43 / 0.1.43.1 测过（E432：解码持平、prompt −0.5%），没有升级；0.1.43.1 的社区报告是 [Strata PR #2237](https://github.com/Niko1221/Strata/pull/2237)。
+- **现在的速度**（E415，生产配置，无图片编码器）：prompt 4K 985、32K 1,792、128K 2,046 tok/s，解码 77 / 82 / 75；之后常驻 hc 读让每个验证窗口再省 2.5–2.8%（E427），自适应版再省 0.8–1.4%（E439），tok/s 没有按 E415 的方法重测。0.1.43.1 上同一套补丁、开着计时开关（E449，见 0.5 节）：926 / 1,729 / 1,968，解码 77.4 / 79.8 / 78.9。同样分层、同样解码配置跑 UD-Q4_K_XL（E423）748 / 1,738 / 1,976，解码 51 / 52 / 50；单卡 UD-Q4 676 / 1,117 / 1,087，解码 32–33。完整对比见社区报告 [#1927](https://github.com/Niko1221/Strata/pull/1927)（0.1.42）和 [#2237](https://github.com/Niko1221/Strata/pull/2237)（0.1.43.1）。
 - **从 llama.cpp 到 Strata 的总账**（同一份 IQ3_S）：解码 26 → 66–75 tok/s（≈2.7×），37K/50K prompt 274 → 1,700（≈6×）。其中 Strata 本身换引擎占大头，之后我们的补丁和配置累计 prompt 约 +50%（714 → 1,433 → 1,705 → 1,711），解码约 +20%。
 - **已经到地板的（别再试）**：解码的配置级杠杆**单独调**全部否定——`--kv-resident` 缩小（E382）、单开 `--pipeline-windows 2`（E384，+1–6%）、pipeline-windows 1 下的 `--spec`/`--spec-min-p` 16 点网格（E385/b，4/0.5 是峰值）；**但组合有效**：`--spec 3 --spec-min-p 0.7 --pipeline-windows 2` 解码 4K +10–16%、32K +8–11%（E387，三轮确认；短草稿接受率 83% vs 68%，第二窗的推测才命中），prompt 不变，输出跨启动不确定（基线是确定的），128K 在无编码器配置下 +11%（E388）；10-09 00:16 上生产；并发批槽对这台机器无益（常驻专家 41% < 上游门槛 50%，槽里不带 MTP）；IQ3_S 的 MMQ 分块/stream-K（E279/E280）；`--prefill` chunk 8192 即甜点（E296）；上游的 GDN 分块、Foresight、STAGE_PIN（上游自测对小卡无益或有害）。
-- **还有空间的**：PCIe 拓扑换 x16+x4（大 prompt 约 1.5×，但 27B 的张量并行会崩，二选一，由用户定）；prompt 侧专家 GEMM / GDN / QSA 注意力 / hc 读各占 10–15%，每项都是内核级工作，≤10%。
+- **还有空间的**：PCIe 拓扑换 x16+x4（大 prompt 约 1.5×，但 27B 的张量并行会崩，二选一，由用户定）。prompt 里调优后最大的专家段已经测到头（E450–E452，见 0.5 节）；解码在这个显存容量下已到地板（命中率与草稿接受率）。四个引擎 PR 10-13 在 0.1.43.1 上各做了 10 对交错 A/B（#2226、#1167、#1992、#1151），等上游收录。
+
+## 0.5 时间花在哪：原版对比调优后（0.1.43.1，E449）
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/breakdown-prompt-zh-dark.png">
+  <img alt="读 prompt 的时间分解：原版 0.1.43.1 对比调优后，4K / 32K / 128K" src="docs/breakdown-prompt-zh-light.png" width="100%">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/breakdown-decode-zh-dark.png">
+  <img alt="解码的时间分解：原版 0.1.43.1 对比调优后，4K / 32K / 128K" src="docs/breakdown-decode-zh-light.png" width="100%">
+</picture>
+
+*同一版本（0.1.43.1）、同一台机器、同一模型（IQ3_S 双卡分层，无图片编码器），每边两个冷启动 server，每个长度 4 条请求。**原版** = 标签 + setup 在 SSD 上写出的参数，不开任何开关；**调优** = 同一标签 + 生产补丁 + 生产开关与参数。柱长是实测；分段来自引擎自带的计时开关（prompt：两张卡各阶段相加；解码：另跑一次剖析，单流水窗口），所以分段是估计。计时开关本身让速度慢 1–5%；PLE 表未锁页。原始数据：`bench/results/e449/`。*
+
+- **读 prompt 快 2.1–2.3 倍**：4K / 32K / 128K 449 → 926、758 → 1,729、861 → 1,968 tok/s。主要来自 GDN 段（32K 每千 token 594 → 153 ms：FP16 进出 + rocBLAS 解表），hc 读和 QSA 投影也明显变小；专家段基本没动（278 → 213 ms，只有路由 + 共享专家变了）。
+- **解码快 1.23–1.30 倍**：62.6 → 77.4、65.1 → 79.8、60.8 → 78.9 tok/s。每一段都小一些，hc 读 + 路由降得最多（3.4 → 2.3 ms/token，常驻 hc 读）；其余来自短草稿 + 两个流水窗口和共享专家分叉流。
+
+**每一项改在哪里**（各项来自不同版本、不同测量，**不能相乘**；同一版本的合计效果看上面两张图）
+
+| 阶段 | 改动 | 来源 | 实测（版本） | 状态 |
+|---|---|---|---|---|
+| prompt：稠密 GEMM | 16 位 GEMM 以 FP16 进出（`STRATA_HIP_PROMPT_F16=1`） | [#835](https://github.com/Niko1221/Strata/pull/835) | prompt ≈2×（0.1.39） | 已收录，默认关 |
+| prompt：稠密 GEMM | gfx1030 的 rocBLAS 解表 | [#1167](https://github.com/Niko1221/Strata/pull/1167) | 1K +13.9%、4K +12.1%（0.1.43.1，10 对） | 待收录 |
+| prompt：QSA 注意力 | 每步 8 cell + DPP 交换 | #849 → 0.1.40.2 | +6–12%（0.1.40） | 已收录，默认开（两边都有） |
+| prompt：QSA 选块 | 选块打分走 SGEMM（生产）/ FP32 分块核（接替它的 PR） | [#1151](https://github.com/Niko1221/Strata/pull/1151) | 128K +3.2%、32K +0.6%（0.1.43.1，10 对） | 待收录 |
+| prompt：整体 | `STRATA_SPLIT_MTP_BATCH=1` | 上游开关 | 4K / 32K / 128K +4 / +7 / +2%（0.1.42） | 开关 |
+| 解码：草稿 | `--spec 3 --spec-min-p 0.7 --pipeline-windows 2` | 配置 | 4K +10–16%、32K +8–11%（0.1.41，E387） | 配置 |
+| 解码：hc 读 | 验证器的 hc 读改成一个常驻内核 | [#2226](https://github.com/Niko1221/Strata/pull/2226) | 每窗 4K −6.6%、32K −4.4%（0.1.43.1，10 对） | 待收录 |
+| 解码：共享专家 | 共享专家分叉流（calibrate 按机器决定） | [#1992](https://github.com/Niko1221/Strata/pull/1992) | 4K +8.0%、32K +9.5%（0.1.43.1，10 对） | 待收录 |
+| 启动 | PLE 表锁进内存（`--ple-io ram`）+ `STRATA_IO_THREADS=128` | 配置 | 首块等待 600 → 306 ms（线程）→ 10 ms（锁页） | 配置 |
+| 稳定性 | `STRATA_HIP_ADAPT_KERNEL_COPY=1` | 上游开关（#884） | 128K 停转 3/3 → 0/3 | 开关 |
+
+**专家段为什么没动**（E450–E452）：调优后专家成了 prompt 里最大的一段，但测下来没有空间——llama.cpp 的 MMQ 在真实形状上 28–34 TOPS 封顶，每专家行数 ≥64 后不再涨；换 tile 宽度不省时；让 MMQ 原地读专家、不再搬进分组缓冲（输出逐位相同）只快 0.5%，因为省下的拷贝本来就便宜，原地读又让 GEMM 慢了 1.7%。
 
 ## 1. 时间线
 

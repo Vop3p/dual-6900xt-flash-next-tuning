@@ -1,0 +1,183 @@
+# Where the time goes, stock Strata 0.1.43.1 vs the tuned production setup (E449): two stacked-bar charts
+# (prompt, decode), en/zh x light/dark.  Reads data.json from parse.py.  Run with a Python that has playwright.
+import asyncio, json, os, statistics as st, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'png')
+D = json.load(open(os.path.join(HERE, 'data.json')))
+med = st.median
+
+# ---------------------------------------------------------------- data
+PC = ['hc read', 'GDN', 'QSA proj', 'QSA select+attn', 'experts', 'other']
+PC_ZH = ['hc 读', 'GDN', 'QSA 投影', 'QSA 选块+注意力', '专家', '其他']
+PC_EN = ['hc read', 'GDN', 'QSA projections', 'QSA select + attention', 'experts', 'other']
+DC = ['hc read', 'dense GEMV', 'attn + GDN rec', 'routed experts', 'waits', 'draft + commit']
+DC_ZH = ['hc 读 + 路由', '稠密 GEMV（投影、共享专家、head）', '注意力 + GDN 递推', '路由专家', '等待（CPU 专家、PCIe）', '草稿 + 提交']
+DC_EN = ['hc read + router', 'dense GEMV (projections, shared expert, head)', 'attention + GDN recurrence', 'routed experts',
+         'waits (CPU experts, PCIe)', 'draft + commit']
+
+
+def prompt_rows():
+    rows = []
+    for t in ('4096', '32768', '128000'):
+        r = {}
+        for side, arms in (('s', ('s-t1', 's-t2')), ('p', ('p-t1', 'p-t2'))):
+            reqs = [q for a in arms if a in D for q in D[a]['prompt'][t]]
+            ms1k = med(q['_ttft'] / q['_tokens'] * 1000 for q in reqs)
+            tot = {c: sum(q[c] for q in reqs) for c in PC}
+            s = sum(tot.values())
+            r[side] = dict(total=ms1k, tok_s=1e6 / ms1k, seg=[tot[c] / s * ms1k for c in PC],
+                           share=[tot[c] / s for c in PC], n=len(reqs))
+        rows.append((t, r))
+    return rows
+
+
+def decode_rows():
+    rows = []
+    for i, t in enumerate(('4096', '32768', '128000')):
+        r = {}
+        for side, tarms, varm in (('s', ('s-t1', 's-t2'), 's-v'), ('p', ('p-t1', 'p-t2'), 'p-v')):
+            # t arms: requests in order 4K, 4K, 32K, 32K, 128K, 128K
+            ms = [D[a]['decode'][2 * i + k]['ms_tok'] for a in tarms if a in D for k in (0, 1)]
+            tot_ms = med(ms)
+            stg = D[varm]['stages'][2 * i:2 * i + 2] if i < 2 else D[varm + '128']['stages'][0:2]
+            tot = {c: sum(q.get(c, 0) for q in stg) for c in DC}
+            s = sum(tot.values())
+            r[side] = dict(total=tot_ms, tok_s=1000 / tot_ms, seg=[tot[c] / s * tot_ms for c in DC],
+                           share=[tot[c] / s for c in DC], n=len(ms))
+        rows.append((t, r))
+    return rows
+
+
+# ---------------------------------------------------------------- page
+CSS = """:root{--bg:#f5f6f4;--panel:#fff;--ink:#1b2321;--muted:#5d6966;--rule:#d9dedb;
+--c1:#2a78d6;--c2:#eb6834;--c3:#1baf7a;--c4:#eda100;--c5:#e87ba4;--c6:#008300;
+--f-display:"Noto Serif SC",serif;--f-body:"Noto Sans SC",system-ui,sans-serif;--f-data:"IBM Plex Mono",monospace}
+:root[data-theme="dark"]{--bg:#121816;--panel:#1a2220;--ink:#e4ebe8;--muted:#9aa8a4;--rule:#2c3633;
+--c1:#3987e5;--c2:#d95926;--c3:#199e70;--c4:#c98500;--c5:#d55181;--c6:#008300}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5}
+.fig{width:1100px;box-sizing:border-box;padding:16px}h2{font-family:var(--f-display);font-size:21px;margin:0 0 4px}
+.sub{color:var(--muted);font-size:13.5px;margin:0 0 10px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--muted);margin-bottom:10px}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;background:var(--c)}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:12px 16px 6px}
+.grp{display:grid;grid-template-columns:150px 1fr;column-gap:10px;padding:8px 0;border-top:1px solid var(--rule)}
+.grp:first-child{border-top:0}
+.ctx{font-size:14px;font-weight:500;grid-row:span 2;align-self:center}
+.row{display:grid;grid-template-columns:62px 1fr;align-items:center;column-gap:8px;margin:3px 0}
+.who{font-size:12.5px;color:var(--muted)}
+.track{position:relative;height:22px}
+.stack{display:flex;height:100%;gap:2px}
+.stack i{display:block;height:100%;background:var(--c);position:relative}
+.stack i:first-child{border-radius:2px 0 0 2px}.stack i:last-child{border-radius:0 4px 4px 0}
+.stack i em{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-style:normal;
+ font-family:var(--f-data);font-size:11px;color:#fff;white-space:nowrap;overflow:hidden}
+.tot{position:absolute;top:1px;font-family:var(--f-data);font-size:12.5px;white-space:nowrap}
+.tot b{font-weight:600}
+.axis{display:grid;grid-template-columns:150px 1fr;column-gap:10px;font-size:12px;color:var(--muted);padding:2px 0 4px}
+.axis div{padding-left:70px}
+.note{color:var(--muted);font-size:12.5px;margin-top:10px;line-height:1.55}"""
+
+
+def stack(seg, total, mx, unit, speed, fmt, k=0.70):
+    w = total / mx * 100 * k
+    cells = ''
+    for j, v in enumerate(seg):
+        pct = v / total * 100
+        lab = fmt(v) if v / mx * 1100 * k * 0.86 > 44 else ''   # label only where it fits (~44 px)
+        cells += f'<i style="--c:var(--c{j + 1});flex:{v:.4f} 0 0"><em>{lab}</em></i>'
+    return (f'<div class="track"><div class="stack" style="width:{w:.2f}%">{cells}</div>'
+            f'<span class="tot" style="left:{w + 1:.2f}%"><b>{fmt(total)}</b> {unit} · {speed}</span></div>')
+
+
+def page(kind, lang, theme):
+    zh = lang == 'zh'
+    if kind == 'prompt':
+        rows, names = prompt_rows(), (PC_ZH if zh else PC_EN)
+        mx = max(r[s]['total'] for _, r in rows for s in 'sp')
+        unit = '毫秒 / 千 token' if zh else 'ms per 1K tokens'
+        fmt = lambda v: f'{v:,.0f}'
+        sp = lambda d: f'{d["tok_s"]:,.0f} tok/s'
+        ctxn = {'4096': '4K', '32768': '32K', '128000': '128K'}
+        h = ('读 prompt 的时间花在哪：原版 0.1.43.1 对比调优后（E449）' if zh else
+             'Where reading a prompt goes: stock Strata 0.1.43.1 against the tuned setup (E449)')
+        sub = ('柱长 = 每读 1,000 个 token 的毫秒数（客户端首 token 时间）；越短越快' if zh else
+               'Bar length = milliseconds per 1,000 prompt tokens (client time to first token); shorter is faster')
+    else:
+        rows, names = decode_rows(), (DC_ZH if zh else DC_EN)
+        mx = max(r[s]['total'] for _, r in rows for s in 'sp')
+        unit = '毫秒 / token' if zh else 'ms per token'
+        fmt = lambda v: f'{v:.1f}'
+        sp = lambda d: f'{d["tok_s"]:.1f} tok/s'
+        ctxn = {'4096': '4K 上下文' if zh else '4K context', '32768': '32K 上下文' if zh else '32K context',
+                '128000': '128K 上下文' if zh else '128K context'}
+        h = ('解码的时间花在哪：原版 0.1.43.1 对比调优后（E449）' if zh else
+             'Where decoding goes: stock Strata 0.1.43.1 against the tuned setup (E449)')
+        sub = ('柱长 = 每输出 1 个 token 的毫秒数；越短越快' if zh else
+               'Bar length = milliseconds per output token; shorter is faster')
+    body = ''
+    for t, r in rows:
+        x = r['s']['total'] / r['p']['total']
+        lab_s, lab_p = ('原版', '调优') if zh else ('stock', 'tuned')
+        body += (f'<div class="grp"><div class="ctx">{ctxn[t]}<br><span class="who">×{x:.2f}</span></div>'
+                 f'<div class="row"><span class="who">{lab_s}</span>{stack(r["s"]["seg"], r["s"]["total"], mx, unit, sp(r["s"]), fmt)}</div>'
+                 f'<div class="row"><span class="who">{lab_p}</span>{stack(r["p"]["seg"], r["p"]["total"], mx, unit, sp(r["p"]), fmt)}</div></div>')
+    leg = '<div class="legend">' + ''.join(f'<span style="--c:var(--c{j + 1})">{n}</span>' for j, n in enumerate(names)) + '</div>'
+    note = NOTES[(kind, lang)]
+    return (f'<!doctype html><html lang="{lang}" data-theme="{theme}"><head><meta charset="utf-8">'
+            '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500&family='
+            'Noto+Serif+SC:wght@600&family=IBM+Plex+Mono:wght@400;600&display=swap">'
+            f'<style>{CSS}</style></head><body><div class="fig" id="f"><h2>{h}</h2><p class="sub">{sub}</p>{leg}'
+            f'<div class="panel">{body}</div><div class="note">{note}</div></div></body></html>')
+
+
+NOTES = {
+    ('prompt', 'en'): 'One machine (2x RX 6900 XT, PCIe 4.0 x8 each, Ryzen 5 5600X, ROCm 10.0), GSQ-RCO IQ3_S on the '
+                      'two-card layer split, no vision encoder; four prompts per length (two cold servers per side). '
+                      '<b>Stock</b>: the v0.1.43.1 tag with the arguments setup writes on an SSD (spec 4 / min-p 0.5, '
+                      'no switches). <b>Tuned</b>: the same tag + the production patches (the rocBLAS table #1167, the '
+                      'SGEMM QSA scorer that #1151 replaces, #2226) + the production switches (among them the FP16 '
+                      'prompt GEMMs of #835, in the tag but off by default) and arguments; the DPP attention (#849) is '
+                      'in both. The segments split each bar by the share of the two cards\' GPU time per phase '
+                      '(STRATA_PREFILL_TIMING, card 0 and card 1 summed); the cards overlap chunk by chunk, so a '
+                      'segment is a share of the work, not a stretch of the wall clock. The PLE table ran unlocked '
+                      '(memlock limit), as in PR #2237.',
+    ('prompt', 'zh'): '同一台机器（2× RX 6900 XT 各 PCIe 4.0 x8、Ryzen 5 5600X、ROCm 10.0），GSQ-RCO IQ3_S 双卡分层，无图片编码器；'
+                      '每个长度 4 条（每边两个冷启动 server）。<b>原版</b>：v0.1.43.1 标签 + setup 在 SSD 上写的参数（spec 4 / min-p 0.5，不开任何开关）。'
+                      '<b>调优</b>：同一标签 + 生产补丁（rocBLAS 表 #1167、SGEMM 版 QSA 打分（#1151 的前身）、#2226）+ 生产开关（含 #835 的 FP16 prompt GEMM，标签里已有但默认关）和参数；DPP 注意力（#849）两边都有。'
+                      '分段按两张卡各阶段 GPU 时间之和的占比切分（STRATA_PREFILL_TIMING，卡 0 + 卡 1）；两卡按块流水重叠，'
+                      '所以分段表示工作量占比，不是墙钟上的一段。PLE 表未锁页（memlock 限制），与 PR #2237 相同。',
+    ('decode', 'en'): 'Same machine, model and arms as the prompt chart; 256 tokens out, greedy. Bar length: the measured '
+                      'ms per output token in each side\'s own configuration (stock: one window at a time, spec 4 / '
+                      'min-p 0.5; tuned: spec 3 / min-p 0.7 with two pipeline windows), median of four requests '
+                      '(STRATA_DECODE_TIMING). Segments: the share of each GPU phase from a separate run with '
+                      'STRATA_VERIFY_PROFILE (both cards summed, one pipeline window, the shared-expert fork off - the '
+                      'profiler needs that), plus the host\'s draft and commit time, scaled to the bar. So the split '
+                      'is an estimate of where the time goes, the bar length is measured.',
+    ('decode', 'zh'): '机器、模型、两边配置同 prompt 图；输出 256 token，greedy。柱长：两边各自配置下实测的每 token 毫秒数'
+                      '（原版：一次一个窗口，spec 4 / min-p 0.5；调优：spec 3 / min-p 0.7 + 两个流水窗口），4 条请求中位数（STRATA_DECODE_TIMING）。'
+                      '分段：另跑一次 STRATA_VERIFY_PROFILE 得到各 GPU 阶段占比（两卡相加、单流水窗口、共享专家分叉关闭——剖析器要求如此），'
+                      '加上主机侧草稿与提交时间，再按柱长缩放。所以柱长是实测，分段是估计。',
+}
+
+
+async def main():
+    from playwright.async_api import async_playwright
+    os.makedirs(OUT, exist_ok=True)
+    async with async_playwright() as p:
+        b = await p.chromium.launch()
+        pg = await (await b.new_context(viewport={"width": 1100, "height": 900}, device_scale_factor=2)).new_page()
+        for kind in ('prompt', 'decode'):
+            for lang in ('en', 'zh'):
+                for theme in ('light', 'dark'):
+                    f = os.path.join(OUT, f'{kind}-{lang}-{theme}.html')
+                    open(f, 'w').write(page(kind, lang, theme))
+                    await pg.goto('file://' + f, wait_until='networkidle')
+                    await pg.evaluate('document.fonts.ready'); await pg.wait_for_timeout(300)
+                    await (await pg.query_selector('#f')).screenshot(path=os.path.join(OUT, f'breakdown-{kind}-{lang}-{theme}.png'))
+                    print('wrote', kind, lang, theme)
+        await b.close()
+
+
+if __name__ == '__main__':
+    asyncio.run(main())
