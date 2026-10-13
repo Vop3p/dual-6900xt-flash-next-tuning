@@ -58,6 +58,26 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 
 *One version (0.1.43.1), one machine, one model (IQ3_S on the two-card layer split, no vision encoder); two cold servers per side, four requests per length. **Stock** = the tag with the arguments setup writes on an SSD and no switches; **tuned** = the same tag + the production patches + the production switches and arguments. The bar lengths are measured; the segments come from the engine's own timing switches (prompt: both cards' phases summed; decode: a separate profiling run with one pipeline window), so the split is an estimate. The timing switches cost 1–5% themselves; the PLE table ran unlocked. Raw data: `bench/results/e449/`.*
 
+The numbers in the charts (the phases are estimates, the totals measured; prompt in ms per 1,000 tokens, decode in ms per token):
+
+| length | | hc read | GDN | QSA projections | QSA select + attention | experts | other | total (ms per 1K tokens) | tok/s |
+|---|---|---|---|---|---|---|---|---|---|
+| 4K | stock | 278 | 978 | 281 | 104 | 558 | 27 | **2,226** | 449 |
+|  | tuned | 116 | 269 | 73 | 122 | 483 | 16 | **1,080** | 926 |
+| 32K | stock | 161 | 594 | 169 | 98 | 278 | 20 | **1,320** | 758 |
+|  | tuned | 67 | 153 | 41 | 90 | 213 | 15 | **578** | 1,729 |
+| 128K | stock | 136 | 502 | 143 | 122 | 237 | 21 | **1,162** | 861 |
+|  | tuned | 56 | 128 | 34 | 87 | 181 | 22 | **508** | 1,968 |
+
+| context | | hc read + router | dense GEMV (projections, shared expert, head) | attention + GDN recurrence | routed experts | waits (CPU experts, PCIe) | draft + commit | total (ms per token) | tok/s |
+|---|---|---|---|---|---|---|---|---|---|
+| 4K | stock | 3.39 | 4.33 | 1.23 | 3.33 | 1.70 | 1.99 | **15.97** | 62.6 |
+|  | tuned | 2.30 | 3.91 | 1.09 | 2.71 | 1.31 | 1.60 | **12.92** | 77.4 |
+| 32K | stock | 3.40 | 4.33 | 1.40 | 3.30 | 0.95 | 2.00 | **15.37** | 65.1 |
+|  | tuned | 2.32 | 3.94 | 1.24 | 2.73 | 0.77 | 1.52 | **12.53** | 79.8 |
+| 128K | stock | 3.48 | 4.42 | 1.81 | 3.27 | 1.38 | 2.09 | **16.45** | 60.8 |
+|  | tuned | 2.25 | 3.80 | 1.51 | 2.53 | 1.01 | 1.57 | **12.68** | 78.9 |
+
 - **Prompts read 2.1–2.3× faster**: 449 → 926, 758 → 1,729, 861 → 1,968 tok/s at 4K / 32K / 128K. Mostly the GDN phase (594 → 153 ms per 1,000 tokens at 32K: FP16 in and out plus the rocBLAS solution table); the hc read and the QSA projections shrink too; the experts barely move (278 → 213 ms, only the router and shared expert change).
 - **Decode 1.23–1.30× faster**: 62.6 → 77.4, 65.1 → 79.8, 60.8 → 78.9 tok/s. Every phase is a little shorter; the hc read and router most (3.4 → 2.3 ms per token, the persistent hc read); the rest comes from the short draft with two pipeline windows and the shared-expert fork.
 
