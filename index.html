@@ -73,20 +73,20 @@ code{font-family:var(--f-data);font-size:.92em}
 <body>
 <div class="wrap">
 <header>
-  <div class="eyebrow">AiBox · 2× RX 6900 XT · Qwen3.8-Flash-Next IQ3_S · 09-30 → 10-08</div>
+  <div class="eyebrow">AiBox · 2× RX 6900 XT · Qwen3.8-Flash-Next IQ3_S · 09-30 → 10-13</div>
   <h1>Flash-Next 调优时间线</h1>
   <p class="lede">同一个模型（IQ3_S）在这台机器上从 llama.cpp 换到 Strata，再一步步叠加改动。每一步写了当时为什么这么做和实测效果；虚线框是试过但没采用的方向。速度一律指双卡 layer split。</p>
 </header>
 
 <section>
-  <h2>现在（strata-142-cd87f4d2 + E387 解码配置 + SPLIT_MTP_BATCH）</h2>
+  <h2>现在（strata-142-hcpa-2712fb13：0.1.42 + 常驻 hc 读 + E387 解码配置 + SPLIT_MTP_BATCH）</h2>
   <div class="now">
     <div><b>985</b><small>4K prompt tok/s（E415）</small></div>
     <div><b>1,792</b><small>32K prompt tok/s（E415；三轮均值 1,829）</small></div>
     <div><b>2,046</b><small>128K prompt tok/s（E415，无图片编码器）</small></div>
     <div><b>77 / 82 / 75</b><small>解码 tok/s，4K / 32K / 128K（E415；真实会话 138K 上下文 78）；之前 66–75</small></div>
   </div>
-  <p class="foot">生产 = Strata 上游 0.1.42 + STRATA_SPLIT_MTP_BATCH=1 + 7 个本地补丁（PR #1149 / #1151 / #1167 + rocBLAS 解的本机缓存）+ 自改的 llama.cpp ggml（MMQ 的 q8_0 / iq3_s dot 链头用 VOP3P 编码）。</p>
+  <p class="foot">生产（10-12 22:02 起）= Strata 上游 0.1.42 + STRATA_SPLIT_MTP_BATCH=1 + 7 个本地补丁（PR #1149 / #1151 / #1167 + rocBLAS 解的本机缓存）+ 验证器 hc 读常驻内核（PR #2226，STRATA_HC_PERSIST=1）+ 自改的 llama.cpp ggml（MMQ 的 q8_0 / iq3_s dot 链头用 VOP3P 编码）。上面四个数是 E415（常驻 hc 读之前）；常驻 hc 读之后每个验证窗口再短 2.5–2.8%（E427）和 0.8–1.4%（E439），tok/s 没按 E415 的方法重测。0.1.43.1 上同一套补丁的社区报告（#2237）：prompt 975 / 1,782 / 2,033，解码 79.4 / 81.6 / 77.7。</p>
 </section>
 
 <section>
@@ -98,7 +98,7 @@ code{font-family:var(--f-data);font-size:.92em}
     <span><i class="dot" style="background:var(--l-decode)"></i>解码（tok/s，右轴）</span>
   </div>
   <div class="panel"><div class="chart" id="speed"></div>
-  <p class="foot">各点来自不同实验，条件不完全相同：4K 线的前两点是 5K prompt（E215），238abe8 / 341922e 的 4K 来自两份社区报告的 split 臂；最后一点的 prompt 三档取 E383/E387 的生产臂（解码配置不改 prompt，E388 ±0.7%）；llama.cpp 和 132a522 是 37K（E215）；0.1.39 和 238abe8 来自 10-05 社区报告，当时自适应关着；61c59fa 只测了 128K（E300）；341922e 来自 E342；10-07 起的点来自 E362 / E380 / E382 / E383 的 P 臂（生产配置、图片编码器在 HIP0）；最后一点是 E415（社区报告 #1927 的 iq3s-split-prs 臂，无图片编码器）。空心点表示那一步没测这个指标。</p></div>
+  <p class="foot">各点来自不同实验，条件不完全相同：4K 线的前两点是 5K prompt（E215），238abe8 / 341922e 的 4K 来自两份社区报告的 split 臂；最后一点的 prompt 三档取 E383/E387 的生产臂（解码配置不改 prompt，E388 ±0.7%）；llama.cpp 和 132a522 是 37K（E215）；0.1.39 和 238abe8 来自 10-05 社区报告，当时自适应关着；61c59fa 只测了 128K（E300）；341922e 来自 E342；10-07 起的点来自 E362 / E380 / E382 / E383 的 P 臂（生产配置、图片编码器在 HIP0）；最后一点是 E415（社区报告 #1927 的 iq3s-split-prs 臂，无图片编码器）。空心点表示那一步没测这个指标。最后一点是社区报告 #2237 的 prs 臂（0.1.43.1 + 同一套补丁 + #2226，PLE 表未锁页），不是生产二进制（生产仍是 0.1.42 底座，0.1.43.1 实测无收益未升级，E432）。</p></div>
 </section>
 
 <section>
@@ -127,7 +127,8 @@ code{font-family:var(--f-data);font-size:.92em}
     <li><b>IQ3_S 的 MMQ 分块 / stream-K</b>（E279/E280）、<code>--prefill</code> chunk 8192 即甜点（E296）、张量并行（E234，+6%）。</li>
     <li><b>上游自己测过对小卡无益：</b>GDN 分块（需 128 SM）、Foresight 交换槽（解码变慢）、STAGE_PIN（IQ3_S 损坏，改回 opt-in）。</li>
     <li><b>0.1.42 的 opt-in（E413）和把 llama.cpp MMQ 补丁带进 Strata（E414）：</b>只有 <code>STRATA_SPLIT_MTP_BATCH=1</code> 过线（已上生产）；TAIL_SKIP / ROUTE_RESIDENT / aux-cpus 在噪声内或更慢，RESIDENT_SORT / PF_FUSED 本机不触发；ggml 补丁在 Strata 的专家 GEMM 上 ±1%。</li>
-    <li><b>还有空间的只剩：</b>PCIe 拓扑 x16+x4（大 prompt 约 1.5×，代价是 27B 的张量并行会崩，用户定）；prompt 侧专家 GEMM / GDN / QSA / hc 读各 10–15%，都是内核级工作。</li>
+    <li><b>prompt 专家段（E450–E452）：</b>llama.cpp 的 MMQ 在真实形状上 28–34 TOPS 封顶；换 tile 宽度不省时；原地读不搬运只 +0.5%。<b>上游 0.1.43.1</b>（E432）对本机无收益。</li>
+    <li><b>还有空间的只剩：</b>PCIe 拓扑 x16+x4（大 prompt 约 1.5×，代价是 27B 的张量并行会崩，用户定）。解码在这个显存容量下已到地板（命中率与草稿接受率）。</li>
   </ul>
 </section>
 
@@ -151,6 +152,7 @@ const M=[
   {k:'0.1.41\n10-08',p4:961,p32:1710,p128:1950,d:74.2},
   {k:'spec3/0.7+win2\n10-09',p4:961,p32:1710,p128:1950,d:82.2},
   {k:'0.1.42+MTP batch\n10-10',p4:985,p32:1792,p128:2046,d:81.9},
+  {k:'0.1.43.1+PRs\n10-13',p4:975,p32:1782,p128:2033,d:81.6},
 ];
 (function(){
   const W=860,H=372,L=56,R=60,T=16,B=84;
@@ -244,6 +246,12 @@ const S=[
  ['10-10','23:38','drop','llama.cpp RDNA2 MMQ 补丁放进 Strata（E414，对照 PR #1897）','27B 上值 +5~11% 的补丁能否帮 Strata 的 UD-Q4 专家 GEMM',[['prompt ±1%；Q8_K 激活版 8K 解码 −7%','down'],['专家 GEMM 只占 prompt 34%、行数形状不同；strata_mmq 本来就没编 Q8K 宏','flat']]],
  ['10-12','02:00','decode','strata-ud-q4 补上 E387 解码配置（E422/E423）','E387 上线时只改了 IQ3_S 两个槽；同一机制在 UD-Q4 上是否成立',[['解码 4K / 32K / 128K +13.5 / +9.6 / +5.2%','up'],['prompt −0.3%，草稿接受 66 → 79%','flat']]],
  ['10-11','01:57','engine','strata-ud-q4 槽升 0.1.42 + KQUANTS + SPLIT_MTP_BATCH（E415，社区报告 #1927）','IQ3_S 与 UD-Q4_K_XL × 单卡/分层 × 原版/PR 八臂',[['UD-Q4 分层 756 / 1,748 / 1,981，解码 45~51（旧槽 715 / 1,640，43~46）','up'],['原版 prompt 两格式相同（稠密 FP16 路径是上限）；UD-Q4 解码比 IQ3_S 慢 30~35%','flat']]],
+ ['10-12','14:55','decode','验证器的 hc 读改成一个常驻内核（E424–E427，STRATA_HC_PERSIST=1）','每层开头的 hc 读是几个小内核，窗口只有 ≤8 token 时时间耗在发射和同步上；改成 80 块常驻 + 两道网格屏障',[['每个验证窗口 −2.5~2.8%','up'],['非逐位，但离 double 参照更近','flat']]],
+ ['10-12','16:51','drop','上游 0.1.43.1 评估（E432/E433）','跟上上游；看 #2055 的 gfx103x 侧流在 Linux 上有没有用',[['解码持平、prompt −0.5%；侧流在本机中性','flat'],['不升级，补丁 rebase 后留作底座','down']]],
+ ['10-12','22:02','decode','常驻 hc 读精简自适应版（strata-142-hcpa-2712fb13，E439）','能不能驻留只靠启动时实跑检查：占用率 API 在 Ubuntu 的 HIP 7.1 下过保守、ROCm 10 下过乐观',[['与上一版逐位相同，每窗再 −0.8~1.4%','up']]],
+ ['10-13','11:30','engine','四个引擎 PR 按上游门槛重测（E448）','维护者要的是当前版本 + 10 对交错 A/B 中位数 + gfx103x ctest',[['#2226 每窗 −6.6 / −4.4%；#1167 prompt +13.9 / +12.1%；#1992 解码 +8.0 / +9.5%；全部 10/10','up'],['#1151 从 0.1.40 的 +7.4% 缩到 128K +3.2%','down']]],
+ ['10-13','13:46','prompt','时间分解：原版对比调优后（E449，README 0.5 节）','同一版本 0.1.43.1 上把两边的 prompt 与解码按阶段拆开',[['prompt ×2.1~2.3（GDN 段 594 → 153 ms/千 token），解码 ×1.23~1.30','up'],['调优后专家段成了 prompt 最大的一块','flat']]],
+ ['10-13','15:42','drop','prompt 专家段：MMQ 上限、tile 宽度、原地读（E450–E452）','专家段占调优后 prompt 的 ~37%，看还能不能挖',[['MMQ 在真实形状上 28–34 TOPS 封顶；换 tile 宽度不省时','flat'],['原地读、不再搬运（输出逐位相同）只 +0.5%，不采用','down']]],
 ];
 const on=new Set(Object.keys(LANES));
 const F=document.getElementById('filters');
