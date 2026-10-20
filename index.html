@@ -98,7 +98,7 @@ code{font-family:var(--f-data);font-size:.92em}
     <span><i class="dot" style="background:var(--l-decode)"></i>解码（tok/s，右轴）</span>
   </div>
   <div class="panel"><div class="chart" id="speed"></div>
-  <p class="foot">各点来自不同实验，条件不完全相同：4K 线的前两点是 5K prompt（E215），238abe8 / 341922e 的 4K 来自两份社区报告的 split 臂；最后一点的 prompt 三档取 E383/E387 的生产臂（解码配置不改 prompt，E388 ±0.7%）；llama.cpp 和 132a522 是 37K（E215）；0.1.39 和 238abe8 来自 10-05 社区报告，当时自适应关着；61c59fa 只测了 128K（E300）；341922e 来自 E342；10-07 起的点来自 E362 / E380 / E382 / E383 的 P 臂（生产配置、图片编码器在 HIP0）；最后一点是 E415（社区报告 #1927 的 iq3s-split-prs 臂，无图片编码器）。空心点表示那一步没测这个指标。最后一点是社区报告 #2237 的 prs 臂（0.1.43.1 + 同一套补丁 + #2226，PLE 表未锁页），不是生产二进制（生产仍是 0.1.42 底座，0.1.43.1 实测无收益未升级，E432）。</p></div>
+  <p class="foot">各点来自不同实验，条件不完全相同：4K 线的前两点是 5K prompt（E215），238abe8 / 341922e 的 4K 来自两份社区报告的 split 臂；spec3/0.7+win2 那点的 prompt 三档取 E383/E387 的生产臂（解码配置不改 prompt，E388 ±0.7%）；llama.cpp 和 132a522 是 37K（E215）；0.1.39 和 238abe8 来自 10-05 社区报告，当时自适应关着；61c59fa 只测了 128K（E300）；341922e 来自 E342；10-07 起的点来自 E362 / E380 / E382 / E383 的 P 臂（生产配置、图片编码器在 HIP0）；0.1.42+MTP batch 那点是 E415（社区报告 #1927 的 iq3s-split-prs 臂，无图片编码器）；0.1.43.1+PRs 那点是社区报告 #2237 的 prs 臂（不是生产二进制）；最后一点是 E504：10-20 的生产 strata-145-pa-a6572b34，同 E415 的负载与配置（无图片编码器，三次中位）。空心点表示那一步没测这个指标。</p></div>
 </section>
 
 <section>
@@ -128,11 +128,11 @@ code{font-family:var(--f-data);font-size:.92em}
     <li><b>上游自己测过对小卡无益：</b>GDN 分块（需 128 SM）、Foresight 交换槽（解码变慢）、STAGE_PIN（IQ3_S 损坏，改回 opt-in）。</li>
     <li><b>0.1.42 的 opt-in（E413）和把 llama.cpp MMQ 补丁带进 Strata（E414）：</b>只有 <code>STRATA_SPLIT_MTP_BATCH=1</code> 过线（已上生产）；TAIL_SKIP / ROUTE_RESIDENT / aux-cpus 在噪声内或更慢，RESIDENT_SORT / PF_FUSED 本机不触发；ggml 补丁在 Strata 的专家 GEMM 上 ±1%。</li>
     <li><b>prompt 专家段（E450–E452）：</b>llama.cpp 的 MMQ 在真实形状上 28–34 TOPS 封顶；换 tile 宽度不省时；原地读不搬运只 +0.5%。<b>上游 0.1.43.1</b>（E432）对本机无收益。</li>
-    <li><b>还有空间的只剩：</b>PCIe 拓扑 x16+x4（大 prompt 约 1.5×，代价是 27B 的张量并行会崩，用户定）。解码在这个显存容量下已到地板（命中率与草稿接受率）。</li>
+    <li><b>还有空间的（10-20）：</b>PCIe 拓扑不换——"x16+x4 大 prompt 约 1.5×"在 10-15 推翻：Strata 上长 prompt 等 PCIe 只占 0.2–0.7%，x8≈x16；<2K 的短 prompt 才有 43–54% 在等（E482，已由 STREAM_MIN 与 CPU 分担缓解）。解码：专家缓存命中 85% 已高于全知静态集，预测换入没有空间，杠杆是每窗换入量（E499，未测）。</li>
   </ul>
 </section>
 
-<p class="foot">数据：实验编号（E…）对应作者的实验日志（见本仓库 README）；Strata 上游 bench/results 里的社区报告（PR #927 / #1270 / #1657 / #1927）。Developed with an AI coding assistant; every number above was measured on 2x RX 6900 XT (gfx1030, PCIe 4.0 x8 each) / Ryzen 5 5600X, ROCm 10.0.</p>
+<p class="foot">数据：实验编号（E…）对应作者的实验日志（见本仓库 README）；Strata 上游 bench/results 里的社区报告（PR #927 / #1270 / #1657 / #1927 / #2237 / #3426），引擎 PR #3381 / #3382 / #3073 / #3095（0.2.0-beta）。Developed with an AI coding assistant; every number above was measured on 2x RX 6900 XT (gfx1030, PCIe 4.0 x8 each) / Ryzen 5 5600X, ROCm 10.0.</p>
 </div>
 
 <script>
