@@ -1,0 +1,14 @@
+{
+  "现在（strata-145-pa-a6572b34：0.1.45 + #2985 流水 MTP + 5 个自有补丁 + E387 解码配置）": "Now (strata-145-pa-a6572b34: 0.1.45 + #2985 pipelined MTP + 5 own patches + the E387 decode config)",
+  "4K prompt tok/s（E504，三次中位）": "4K prompt tok/s (E504, median of 3)",
+  "32K prompt tok/s（E504）": "32K prompt tok/s (E504)",
+  "128K prompt tok/s（E504，无图片编码器；10-10 是 2,046）": "128K prompt tok/s (E504, no vision encoder; 2,046 on 10-10)",
+  "解码 tok/s，4K / 32K / 128K（E504，单请求）；两路并发合计 60–64（E481）": "decode tok/s at 4K / 32K / 128K (E504, one request); two streams together 60-64 (E481)",
+  "生产（10-19 20:30 起）= Strata 上游 0.1.45 + #2985 流水 MTP（STRATA_PIPED_MTP=2，JacobSussan）+ 自有补丁：单路保留 pipeline-windows（STRATA_PW_WITH_BATCH=1，PR #3095）、HIP 上的 SIMT=2 打分（PR #3073）、--batch 下的 CPU 分担（PR #3382）、RDNA2 读 prompt 注意力（PR #3381）、rocBLAS 解的本机缓存 + STRATA_PREFILL_STREAM_MIN=2048 + 自改的 llama.cpp ggml（MMQ dot 链头用 VOP3P 编码）；验证器 hc 常驻读（#2226）等早先的 PR 已在上游。两路并发（parallel 2）。四个数是 E504（同 E415 的合成负载 benchmark.py，三次中位）。": "Production (since 10-19 20:30) = Strata upstream 0.1.45 + #2985 pipelined MTP (STRATA_PIPED_MTP=2, JacobSussan) + own patches: the solo path keeps --pipeline-windows (STRATA_PW_WITH_BATCH=1, PR #3095), the SIMT=2 scorer on HIP (PR #3073), the CPU share beside --batch (PR #3382), the RDNA2 prompt attention (PR #3381), a per-device rocBLAS solution cache + STRATA_PREFILL_STREAM_MIN=2048 + a modified llama.cpp ggml (MMQ dot-chain heads in the VOP3P encoding); the persistent hc read (#2226) and the earlier PRs are upstream now. Two parallel slots. The four numbers are E504 (the E415 synthetic load, benchmark.py, median of 3).",
+  "读 prompt，4K（tok/s，左轴）": "prompt 4K (tok/s, left axis)",
+  "读 prompt，32K–37K（tok/s，左轴）": "prompt 32K–37K (tok/s, left axis)",
+  "读 prompt，128K（tok/s，左轴）": "prompt 128K (tok/s, left axis)",
+  "解码（tok/s，右轴）": "decode (tok/s, right axis)",
+  "'解码'": "'decode'",
+  "0.1.45+补丁": "0.1.45+patches"
+}
