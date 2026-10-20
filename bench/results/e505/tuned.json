@@ -1,0 +1,80 @@
+{
+  "args": [
+    "--pack",
+    "<path>",
+    "--native",
+    "<path>",
+    "--ple-gguf",
+    "<path>",
+    "--expert-profile",
+    "<path>",
+    "--expert-cache",
+    "auto",
+    "--prefill",
+    "auto",
+    "--spec",
+    "3",
+    "--spec-min-p",
+    "0.7",
+    "--mtp",
+    "<path>",
+    "--max-context",
+    "262144",
+    "--kv",
+    "int8",
+    "--kv-resident",
+    "32768",
+    "--ple-io",
+    "ram",
+    "--vision",
+    "--vram-reserve-mib",
+    "700",
+    "--pipeline-windows",
+    "2",
+    "--batch-mtp"
+  ],
+  "tokenizer": "<path>",
+  "model_name": "strata-split-256k",
+  "lib_dirs": [
+    "/opt/rocm/lib"
+  ],
+  "port": 8080,
+  "backend": "hip",
+  "gpu": [
+    1,
+    0
+  ],
+  "gpus_asked": true,
+  "layer_split": "auto",
+  "env": {
+    "STRATA_ROCBLAS_TUNING": "<path>",
+    "STRATA_IO_THREADS": "128",
+    "STRATA_SH_STREAM": "1",
+    "STRATA_HIP_PROMPT_F16": "1",
+    "STRATA_HIP_ADAPT_KERNEL_COPY": "1",
+    "STRATA_PREFILL_CPU_SHARE": "auto",
+    "STRATA_SPLIT_MTP_BATCH": "0",
+    "STRATA_HC_PERSIST": "1",
+    "STRATA_SELECT_SIMT": "2",
+    "STRATA_PW_WITH_BATCH": "1",
+    "STRATA_PIPED_CONCURRENT": "1",
+    "STRATA_PIPED_MTP": "2",
+    "STRATA_PREFILL_STREAM_MIN": "2048",
+    "STRATA_PREFILL_CPU_SHARE_BATCH": "1",
+    "STRATA_PROMPT_ATTN_RDNA2": "1"
+  },
+  "vision": {
+    "exe": "<path>",
+    "mmproj": "<path>",
+    "model": "<path>",
+    "gpu": true,
+    "max_tokens": 4096,
+    "cuda_device": 0
+  },
+  "gpu_order": "as_given",
+  "parallel": 2,
+  "sampling": {
+    "temperature": 0,
+    "presence_penalty": 0
+  }
+}

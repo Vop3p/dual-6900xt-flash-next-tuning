@@ -1,0 +1,758 @@
+{
+ "s-t1": {
+  "prompt": {
+   "4096": [
+    {
+     "hc read": 1011.0,
+     "GDN": 3721.0,
+     "QSA proj": 1070.0,
+     "QSA select+attn": 399.0,
+     "experts": 2090.0,
+     "other": 110.0,
+     "_unassigned": 87.0,
+     "_gpu0": 4399,
+     "_gpu1": 4089,
+     "_tokens": 4089,
+     "_ttft": 9057.458493014565
+    },
+    {
+     "hc read": 1011.0,
+     "GDN": 3722.0,
+     "QSA proj": 1071.0,
+     "QSA select+attn": 399.0,
+     "experts": 2048.0,
+     "other": 110.0,
+     "_unassigned": 87.0,
+     "_gpu0": 4375,
+     "_gpu1": 4074,
+     "_tokens": 4089,
+     "_ttft": 9005.676620989107
+    }
+   ],
+   "32768": [
+    {
+     "hc read": 8065.0,
+     "GDN": 29464.0,
+     "QSA proj": 8381.0,
+     "QSA select+attn": 4903.0,
+     "experts": 13404.0,
+     "other": 1009.0,
+     "_unassigned": 807.0,
+     "_gpu0": 34072,
+     "_gpu1": 31959,
+     "_tokens": 32761,
+     "_ttft": 43090.75468798983
+    },
+    {
+     "hc read": 8098.0,
+     "GDN": 29594.0,
+     "QSA proj": 8388.0,
+     "QSA select+attn": 4923.0,
+     "experts": 13476.0,
+     "other": 1077.0,
+     "_unassigned": 807.0,
+     "_gpu0": 34131,
+     "_gpu1": 32238,
+     "_tokens": 32761,
+     "_ttft": 43275.188079016516
+    }
+   ],
+   "128000": [
+    {
+     "hc read": 31832.0,
+     "GDN": 116437.0,
+     "QSA proj": 33034.0,
+     "QSA select+attn": 28088.0,
+     "experts": 53422.0,
+     "other": 5029.0,
+     "_unassigned": 3143.0,
+     "_gpu0": 138557,
+     "_gpu1": 132441,
+     "_tokens": 127993,
+     "_ttft": 148349.5993789984
+    },
+    {
+     "hc read": 31951.0,
+     "GDN": 116780.0,
+     "QSA proj": 33173.0,
+     "QSA select+attn": 28205.0,
+     "experts": 53712.0,
+     "other": 5065.0,
+     "_unassigned": 3143.0,
+     "_gpu0": 138649,
+     "_gpu1": 133390,
+     "_tokens": 127993,
+     "_ttft": 148569.5985899947
+    }
+   ]
+  },
+  "decode": [
+   {
+    "win": 40.64,
+    "tpw": 2.49,
+    "commit": 1.15,
+    "draft": 3.5,
+    "ms_tok": 16.32128514056225
+   },
+   {
+    "win": 36.39,
+    "tpw": 2.39,
+    "commit": 0.72,
+    "draft": 3.34,
+    "ms_tok": 15.225941422594142
+   },
+   {
+    "win": 36.09,
+    "tpw": 2.17,
+    "commit": 0.84,
+    "draft": 3.68,
+    "ms_tok": 16.631336405529957
+   },
+   {
+    "win": 34.91,
+    "tpw": 2.05,
+    "commit": 0.76,
+    "draft": 3.57,
+    "ms_tok": 17.029268292682925
+   },
+   {
+    "win": 38.16,
+    "tpw": 2.46,
+    "commit": 0.8,
+    "draft": 4.01,
+    "ms_tok": 15.512195121951219
+   },
+   {
+    "win": 38.01,
+    "tpw": 2.51,
+    "commit": 0.75,
+    "draft": 3.95,
+    "ms_tok": 15.143426294820717
+   }
+  ]
+ },
+ "p-t1": {
+  "prompt": {
+   "4096": [
+    {
+     "hc read": 434.0,
+     "GDN": 1004.0,
+     "QSA proj": 270.0,
+     "QSA select+attn": 280.0,
+     "experts": 1739.0,
+     "other": 60.0,
+     "_unassigned": 0.0,
+     "_gpu0": 1890,
+     "_gpu1": 1901,
+     "_tokens": 4089,
+     "_ttft": 4373.665921972133
+    },
+    {
+     "hc read": 432.0,
+     "GDN": 1005.0,
+     "QSA proj": 271.0,
+     "QSA select+attn": 280.0,
+     "experts": 1653.0,
+     "other": 68.0,
+     "_unassigned": 0.0,
+     "_gpu0": 1821,
+     "_gpu1": 1887,
+     "_tokens": 4089,
+     "_ttft": 4273.701315018116
+    }
+   ],
+   "32768": [
+    {
+     "hc read": 3393.0,
+     "GDN": 7728.0,
+     "QSA proj": 2060.0,
+     "QSA select+attn": 3258.0,
+     "experts": 10125.0,
+     "other": 1291.0,
+     "_unassigned": 0.0,
+     "_gpu0": 14102,
+     "_gpu1": 13753,
+     "_tokens": 32761,
+     "_ttft": 18906.986593996407
+    },
+    {
+     "hc read": 3398.0,
+     "GDN": 7745.0,
+     "QSA proj": 2064.0,
+     "QSA select+attn": 3271.0,
+     "experts": 10148.0,
+     "other": 1325.0,
+     "_unassigned": 0.0,
+     "_gpu0": 14141,
+     "_gpu1": 13810,
+     "_tokens": 32761,
+     "_ttft": 18976.374165999005
+    }
+   ],
+   "128000": [
+    {
+     "hc read": 13277.0,
+     "GDN": 30419.0,
+     "QSA proj": 8083.0,
+     "QSA select+attn": 14766.0,
+     "experts": 40108.0,
+     "other": 5520.0,
+     "_unassigned": 0.0,
+     "_gpu0": 56353,
+     "_gpu1": 55817,
+     "_tokens": 127993,
+     "_ttft": 61257.315518014366
+    },
+    {
+     "hc read": 13289.0,
+     "GDN": 30496.0,
+     "QSA proj": 8095.0,
+     "QSA select+attn": 14751.0,
+     "experts": 40207.0,
+     "other": 5669.0,
+     "_unassigned": 0.0,
+     "_gpu0": 56507,
+     "_gpu1": 55999,
+     "_tokens": 127993,
+     "_ttft": 61466.73817699775
+    }
+   ]
+  },
+  "decode": [
+   {
+    "win": 25.32,
+    "tpw": 1.82,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 13.912087912087912
+   },
+   {
+    "win": 24.43,
+    "tpw": 1.98,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 12.33838383838384
+   },
+   {
+    "win": 24.61,
+    "tpw": 1.84,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 13.374999999999998
+   },
+   {
+    "win": 24.46,
+    "tpw": 1.87,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 13.080213903743315
+   },
+   {
+    "win": 25.43,
+    "tpw": 1.79,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 14.206703910614525
+   },
+   {
+    "win": 23.65,
+    "tpw": 1.71,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 13.830409356725145
+   }
+  ]
+ },
+ "s-v": {
+  "stages": [
+   {
+    "hc read": 8.92,
+    "dense GEMV": 11.41,
+    "attn + GDN rec": 3.12,
+    "routed experts": 8.700000000000001,
+    "waits": 6.44,
+    "draft + commit": 5.0600000000000005,
+    "_unassigned": 0.0,
+    "_keys": []
+   },
+   {
+    "hc read": 8.92,
+    "dense GEMV": 11.43,
+    "attn + GDN rec": 3.13,
+    "routed experts": 9.0,
+    "waits": 2.77,
+    "draft + commit": 4.62,
+    "_unassigned": 0.0,
+    "_keys": []
+   },
+   {
+    "hc read": 8.65,
+    "dense GEMV": 10.969999999999999,
+    "attn + GDN rec": 3.36,
+    "routed experts": 8.09,
+    "waits": 2.3200000000000003,
+    "draft + commit": 4.48,
+    "_unassigned": 0.0,
+    "_keys": []
+   },
+   {
+    "hc read": 8.65,
+    "dense GEMV": 10.989999999999998,
+    "attn + GDN rec": 3.39,
+    "routed experts": 8.11,
+    "waits": 1.9700000000000002,
+    "draft + commit": 4.4399999999999995,
+    "_unassigned": 0.0,
+    "_keys": []
+   }
+  ],
+  "decode": [
+   {
+    "win": 44.66,
+    "tpw": 2.64,
+    "commit": 0.65,
+    "draft": 4.41,
+    "ms_tok": 16.916666666666664
+   },
+   {
+    "win": 40.36,
+    "tpw": 2.49,
+    "commit": 0.62,
+    "draft": 4.0,
+    "ms_tok": 16.20883534136546
+   },
+   {
+    "win": 38.24,
+    "tpw": 2.12,
+    "commit": 0.61,
+    "draft": 3.87,
+    "ms_tok": 18.037735849056602
+   },
+   {
+    "win": 37.81,
+    "tpw": 2.13,
+    "commit": 0.6,
+    "draft": 3.84,
+    "ms_tok": 17.751173708920188
+   }
+  ]
+ },
+ "p-v": {
+  "stages": [
+   {
+    "hc read": 6.119999999999999,
+    "dense GEMV": 10.34,
+    "attn + GDN rec": 2.83,
+    "routed experts": 6.95,
+    "waits": 5.45,
+    "draft + commit": 4.52,
+    "_unassigned": 3.552713678800501e-15,
+    "_keys": []
+   },
+   {
+    "hc read": 6.0600000000000005,
+    "dense GEMV": 10.26,
+    "attn + GDN rec": 2.8,
+    "routed experts": 6.95,
+    "waits": 3.0100000000000002,
+    "draft + commit": 3.65,
+    "_unassigned": 0.0,
+    "_keys": []
+   },
+   {
+    "hc read": 6.09,
+    "dense GEMV": 10.34,
+    "attn + GDN rec": 3.26,
+    "routed experts": 6.96,
+    "waits": 2.77,
+    "draft + commit": 4.2,
+    "_unassigned": 0.0,
+    "_keys": []
+   },
+   {
+    "hc read": 6.1,
+    "dense GEMV": 10.35,
+    "attn + GDN rec": 3.31,
+    "routed experts": 7.17,
+    "waits": 2.95,
+    "draft + commit": 4.28,
+    "_unassigned": 0.0,
+    "_keys": []
+   }
+  ],
+  "decode": [
+   {
+    "win": 36.3,
+    "tpw": 2.0,
+    "commit": 1.13,
+    "draft": 3.39,
+    "ms_tok": 18.15
+   },
+   {
+    "win": 32.91,
+    "tpw": 1.98,
+    "commit": 0.88,
+    "draft": 2.77,
+    "ms_tok": 16.62121212121212
+   },
+   {
+    "win": 33.79,
+    "tpw": 1.95,
+    "commit": 0.91,
+    "draft": 3.29,
+    "ms_tok": 17.328205128205127
+   },
+   {
+    "win": 34.3,
+    "tpw": 2.03,
+    "commit": 1.04,
+    "draft": 3.24,
+    "ms_tok": 16.896551724137932
+   }
+  ]
+ },
+ "p-t2": {
+  "prompt": {
+   "4096": [
+    {
+     "hc read": 435.0,
+     "GDN": 1002.0,
+     "QSA proj": 270.0,
+     "QSA select+attn": 279.0,
+     "experts": 1732.0,
+     "other": 59.0,
+     "_unassigned": 0.0,
+     "_gpu0": 1881,
+     "_gpu1": 1898,
+     "_tokens": 4089,
+     "_ttft": 4361.744019988691
+    },
+    {
+     "hc read": 431.0,
+     "GDN": 1001.0,
+     "QSA proj": 270.0,
+     "QSA select+attn": 280.0,
+     "experts": 1649.0,
+     "other": 67.0,
+     "_unassigned": 0.0,
+     "_gpu0": 1818,
+     "_gpu1": 1880,
+     "_tokens": 4089,
+     "_ttft": 4260.228372993879
+    }
+   ],
+   "32768": [
+    {
+     "hc read": 3392.0,
+     "GDN": 7712.0,
+     "QSA proj": 2057.0,
+     "QSA select+attn": 3254.0,
+     "experts": 10104.0,
+     "other": 1285.0,
+     "_unassigned": 0.0,
+     "_gpu0": 14097,
+     "_gpu1": 13711,
+     "_tokens": 32761,
+     "_ttft": 18886.633963003987
+    },
+    {
+     "hc read": 3439.0,
+     "GDN": 7726.0,
+     "QSA proj": 2062.0,
+     "QSA select+attn": 3261.0,
+     "experts": 10124.0,
+     "other": 1307.0,
+     "_unassigned": 0.0,
+     "_gpu0": 14139,
+     "_gpu1": 13781,
+     "_tokens": 32761,
+     "_ttft": 18948.77501198789
+    }
+   ],
+   "128000": [
+    {
+     "hc read": 13266.0,
+     "GDN": 30404.0,
+     "QSA proj": 8082.0,
+     "QSA select+attn": 14701.0,
+     "experts": 40051.0,
+     "other": 5389.0,
+     "_unassigned": 0.0,
+     "_gpu0": 56217,
+     "_gpu1": 55671,
+     "_tokens": 127993,
+     "_ttft": 61105.62470997684
+    },
+    {
+     "hc read": 13289.0,
+     "GDN": 30458.0,
+     "QSA proj": 8095.0,
+     "QSA select+attn": 14728.0,
+     "experts": 40150.0,
+     "other": 5586.0,
+     "_unassigned": 0.0,
+     "_gpu0": 56410,
+     "_gpu1": 55890,
+     "_tokens": 127993,
+     "_ttft": 61354.18067901628
+    }
+   ]
+  },
+  "decode": [
+   {
+    "win": 26.82,
+    "tpw": 2.03,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 13.211822660098523
+   },
+   {
+    "win": 23.3,
+    "tpw": 1.98,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 11.767676767676768
+   },
+   {
+    "win": 25.42,
+    "tpw": 2.05,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 12.400000000000002
+   },
+   {
+    "win": 23.86,
+    "tpw": 2.06,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 11.58252427184466
+   },
+   {
+    "win": 23.91,
+    "tpw": 1.7,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 14.064705882352941
+   },
+   {
+    "win": 24.08,
+    "tpw": 1.8,
+    "commit": 0.0,
+    "draft": 0.0,
+    "ms_tok": 13.377777777777776
+   }
+  ]
+ },
+ "s-t2": {
+  "prompt": {
+   "4096": [
+    {
+     "hc read": 1016.0,
+     "GDN": 3748.0,
+     "QSA proj": 1070.0,
+     "QSA select+attn": 402.0,
+     "experts": 2101.0,
+     "other": 108.0,
+     "_unassigned": 87.0,
+     "_gpu0": 4397,
+     "_gpu1": 4134,
+     "_tokens": 4089,
+     "_ttft": 9101.754705014173
+    },
+    {
+     "hc read": 1015.0,
+     "GDN": 3764.0,
+     "QSA proj": 1078.0,
+     "QSA select+attn": 402.0,
+     "experts": 2057.0,
+     "other": 111.0,
+     "_unassigned": 87.0,
+     "_gpu0": 4389,
+     "_gpu1": 4125,
+     "_tokens": 4089,
+     "_ttft": 9069.108625000808
+    }
+   ],
+   "32768": [
+    {
+     "hc read": 8093.0,
+     "GDN": 29583.0,
+     "QSA proj": 8376.0,
+     "QSA select+attn": 4922.0,
+     "experts": 13444.0,
+     "other": 1084.0,
+     "_unassigned": 807.0,
+     "_gpu0": 34108,
+     "_gpu1": 32204,
+     "_tokens": 32761,
+     "_ttft": 43222.21655200701
+    },
+    {
+     "hc read": 8125.0,
+     "GDN": 29703.0,
+     "QSA proj": 8436.0,
+     "QSA select+attn": 4939.0,
+     "experts": 13522.0,
+     "other": 1105.0,
+     "_unassigned": 807.0,
+     "_gpu0": 34216,
+     "_gpu1": 32419,
+     "_tokens": 32761,
+     "_ttft": 43418.772273988
+    }
+   ],
+   "128000": [
+    {
+     "hc read": 31879.0,
+     "GDN": 116519.0,
+     "QSA proj": 33101.0,
+     "QSA select+attn": 28149.0,
+     "experts": 53521.0,
+     "other": 5029.0,
+     "_unassigned": 3142.0,
+     "_gpu0": 138508,
+     "_gpu1": 132832,
+     "_tokens": 127993,
+     "_ttft": 148370.4657490016
+    },
+    {
+     "hc read": 31965.0,
+     "GDN": 116934.0,
+     "QSA proj": 33187.0,
+     "QSA select+attn": 28234.0,
+     "experts": 53694.0,
+     "other": 5071.0,
+     "_unassigned": 3143.0,
+     "_gpu0": 138636,
+     "_gpu1": 133601,
+     "_tokens": 127993,
+     "_ttft": 148550.91679096222
+    }
+   ]
+  },
+  "decode": [
+   {
+    "win": 40.74,
+    "tpw": 2.49,
+    "commit": 1.29,
+    "draft": 3.49,
+    "ms_tok": 16.36144578313253
+   },
+   {
+    "win": 36.45,
+    "tpw": 2.39,
+    "commit": 0.76,
+    "draft": 3.33,
+    "ms_tok": 15.251046025104603
+   },
+   {
+    "win": 36.29,
+    "tpw": 2.17,
+    "commit": 1.13,
+    "draft": 3.67,
+    "ms_tok": 16.723502304147466
+   },
+   {
+    "win": 34.83,
+    "tpw": 2.05,
+    "commit": 0.68,
+    "draft": 3.57,
+    "ms_tok": 16.990243902439026
+   },
+   {
+    "win": 38.34,
+    "tpw": 2.46,
+    "commit": 0.95,
+    "draft": 4.0,
+    "ms_tok": 15.585365853658539
+   },
+   {
+    "win": 37.98,
+    "tpw": 2.51,
+    "commit": 0.67,
+    "draft": 3.95,
+    "ms_tok": 15.131474103585658
+   }
+  ]
+ },
+ "s-v128": {
+  "stages": [
+   {
+    "hc read": 8.92,
+    "dense GEMV": 11.36,
+    "attn + GDN rec": 4.69,
+    "routed experts": 8.56,
+    "waits": 4.7700000000000005,
+    "draft + commit": 5.76,
+    "_unassigned": 0.0,
+    "_keys": []
+   },
+   {
+    "hc read": 8.95,
+    "dense GEMV": 11.38,
+    "attn + GDN rec": 4.74,
+    "routed experts": 8.98,
+    "waits": 2.46,
+    "draft + commit": 4.89,
+    "_unassigned": 0.0,
+    "_keys": []
+   }
+  ],
+  "decode": [
+   {
+    "win": 44.81,
+    "tpw": 2.44,
+    "commit": 0.64,
+    "draft": 5.12,
+    "ms_tok": 18.364754098360656
+   },
+   {
+    "win": 41.79,
+    "tpw": 2.53,
+    "commit": 0.63,
+    "draft": 4.26,
+    "ms_tok": 16.517786561264824
+   }
+  ]
+ },
+ "p-v128": {
+  "stages": [
+   {
+    "hc read": 6.11,
+    "dense GEMV": 10.29,
+    "attn + GDN rec": 4.16,
+    "routed experts": 6.760000000000001,
+    "waits": 4.37,
+    "draft + commit": 4.77,
+    "_unassigned": 0.0,
+    "_keys": []
+   },
+   {
+    "hc read": 6.1,
+    "dense GEMV": 10.27,
+    "attn + GDN rec": 4.13,
+    "routed experts": 6.85,
+    "waits": 3.0300000000000002,
+    "draft + commit": 4.02,
+    "_unassigned": 0.0,
+    "_keys": []
+   }
+  ],
+  "decode": [
+   {
+    "win": 36.57,
+    "tpw": 1.92,
+    "commit": 1.04,
+    "draft": 3.73,
+    "ms_tok": 19.046875
+   },
+   {
+    "win": 34.58,
+    "tpw": 1.91,
+    "commit": 0.99,
+    "draft": 3.03,
+    "ms_tok": 18.104712041884817
+   }
+  ]
+ }
+}

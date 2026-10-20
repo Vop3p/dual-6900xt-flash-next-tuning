@@ -1,0 +1,43 @@
+{
+  "args": [
+    "--pack",
+    "<path>",
+    "--native",
+    "<path>",
+    "--ple-gguf",
+    "<path>",
+    "--expert-profile",
+    "<path>",
+    "--expert-cache",
+    "auto",
+    "--prefill",
+    "auto",
+    "--spec",
+    "4",
+    "--spec-min-p",
+    "0.5",
+    "--mtp",
+    "<path>",
+    "--max-context",
+    "131072",
+    "--kv",
+    "int8",
+    "--kv-resident",
+    "32768"
+  ],
+  "tokenizer": "<path>",
+  "model_name": "iq3s-split",
+  "lib_dirs": [
+    "/opt/rocm/lib"
+  ],
+  "port": 8080,
+  "backend": "hip",
+  "gpu": [
+    1,
+    0
+  ],
+  "gpus_asked": true,
+  "layer_split": "auto",
+  "gpu_order": "as_given",
+  "env": {}
+}

@@ -44,55 +44,61 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 - **Closed directions (measured; do not retry on this box):** every decode-side configuration knob — `--kv-resident` shrink (E382), `--pipeline-windows 2` alone (E384, +1–6%), the 16-point `--spec` × `--spec-min-p` grid at `--pipeline-windows 1` (E385, 4/0.5 is the peak of accepted tokens per window) — **but the combination works**: `--spec 3 --spec-min-p 0.7 --pipeline-windows 2` decodes +10–16% at 4K and +8–11% at 32K (E387, three confirmation rounds; the short draft is accepted 83% of the time instead of 68%, so the speculative second window hits). Prompt speed unchanged; output differs between starts (the baseline is deterministic); 128K +11% in the no-vision-encoder configuration (E388); in production since 10-09 00:16; batch slots as evaluated on 10-08 (resident experts 41% < upstream's 50% gate, slots decode without MTP; **overturned 10-15**: with slot drafts, the solo path kept pipelined and later #2985, `"parallel": 2` is production); MMQ tile / stream-K for IQ3_S (E279/E280); `--prefill` chunks other than 8192 (E296); tensor parallel (E234, +6%); and the upstream opt-ins that upstream itself measured as neutral or negative on small cards (chunked GDN, Foresight swap slots, pinned stage buffers).
 - **What is left:** the PCIe topology for long prompts (x8/x8 kept: on Strata a long prompt waits on PCIe only 0.2–0.7% of the time, but a <2K one 43–54%, E482); more expert swaps per decode window (E499: the adaptive cache already hits 85%, a perfect 8-window predictor would not beat it at today's swap rate - the swap budget is the lever, untested). Four PRs wait for upstream review on 0.2.0-beta (#3381, #3382, and #3073 / #3095 reopened 10-20 with the E503 numbers).
 
-## 0.5 Where the time goes: stock against tuned (0.1.43.1, E449)
+## 0.5 Where the time goes: stock against tuned (0.2.0-beta vs the 10-20 production, E505)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/breakdown-prompt-en-dark.png">
-  <img alt="Where reading a prompt goes: stock Strata 0.1.43.1 against the tuned setup, 4K / 32K / 128K" src="docs/breakdown-prompt-en-light.png" width="100%">
+  <img alt="Where reading a prompt goes: stock Strata 0.2.0-beta against the tuned setup, 4K / 32K / 128K" src="docs/breakdown-prompt-en-light.png" width="100%">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/breakdown-decode-en-dark.png">
-  <img alt="Where decoding goes: stock Strata 0.1.43.1 against the tuned setup, 4K / 32K / 128K" src="docs/breakdown-decode-en-light.png" width="100%">
+  <img alt="Where decoding goes: stock Strata 0.2.0-beta against the tuned setup, 4K / 32K / 128K" src="docs/breakdown-decode-en-light.png" width="100%">
 </picture>
 
-*One version (0.1.43.1), one machine, one model (IQ3_S on the two-card layer split, no vision encoder); two cold servers per side, four requests per length. **Stock** = the tag with the arguments setup writes on an SSD and no switches; **tuned** = the same tag + the production patches + the production switches and arguments. The bar lengths are measured; the segments come from the engine's own timing switches (prompt: both cards' phases summed; decode: a separate profiling run with one pipeline window), so the split is an estimate. The timing switches cost 1–5% themselves; the PLE table ran unlocked. Raw data: `bench/results/e449/`.*
+*One machine, one model (IQ3_S on the two-card layer split, no vision encoder); two cold servers per side, four requests per length, the timing switches on (they cost 3–6%). **Stock** = 0.2.0-beta (main e88ee39d, built with setup.py's HIP options) with the arguments setup writes on an SSD and no switches; **tuned** = the 10-20 production (0.1.45 + #2985 + our patches + the production switches and arguments, two parallel slots). The bar lengths are measured; the segments come from the engine's own timing switches (prompt: both cards' phases summed; decode: a separate profiling run with one pipeline window), so the split is an estimate. Raw data and scripts: `bench/results/e505/` (the 10-13 version of these charts, 0.1.43.1 vs the 10-13 production, was E449).*
 
 The numbers in the charts (the phases are estimates, the totals measured; prompt in ms per 1,000 tokens, decode in ms per token):
 
 | length | | hc read | GDN | QSA projections | QSA select + attention | experts | other | total (ms per 1K tokens) | tok/s |
 |---|---|---|---|---|---|---|---|---|---|
-| 4K | stock | 278 | 978 | 281 | 104 | 558 | 27 | **2,226** | 449 |
-|  | tuned | 116 | 269 | 73 | 122 | 483 | 16 | **1,080** | 926 |
-| 32K | stock | 161 | 594 | 169 | 98 | 278 | 20 | **1,320** | 758 |
-|  | tuned | 67 | 153 | 41 | 90 | 213 | 15 | **578** | 1,729 |
-| 128K | stock | 136 | 502 | 143 | 122 | 237 | 21 | **1,162** | 861 |
-|  | tuned | 56 | 128 | 34 | 87 | 181 | 22 | **508** | 1,968 |
+| 4K | stock | 267 | 986 | 283 | 106 | 547 | 29 | **2,217** | 451 |
+|  | tuned | 122 | 283 | 76 | 79 | 478 | 18 | **1,056** | 947 |
+| 32K | stock | 163 | 596 | 169 | 99 | 271 | 22 | **1,320** | 758 |
+|  | tuned | 71 | 160 | 43 | 68 | 210 | 27 | **578** | 1,731 |
+| 128K | stock | 138 | 504 | 143 | 122 | 231 | 22 | **1,160** | 862 |
+|  | tuned | 57 | 130 | 35 | 63 | 171 | 24 | **479** | 2,088 |
 
 | context | | hc read + router | dense GEMV (projections, shared expert, head) | attention + GDN recurrence | routed experts | waits (CPU experts, PCIe) | draft + commit | total (ms per token) | tok/s |
 |---|---|---|---|---|---|---|---|---|---|
-| 4K | stock | 3.39 | 4.33 | 1.23 | 3.33 | 1.70 | 1.99 | **15.97** | 62.6 |
-|  | tuned | 2.30 | 3.91 | 1.09 | 2.71 | 1.31 | 1.60 | **12.92** | 77.4 |
-| 32K | stock | 3.40 | 4.33 | 1.40 | 3.30 | 0.95 | 2.00 | **15.37** | 65.1 |
-|  | tuned | 2.32 | 3.94 | 1.24 | 2.73 | 0.77 | 1.52 | **12.53** | 79.8 |
-| 128K | stock | 3.48 | 4.42 | 1.81 | 3.27 | 1.38 | 2.09 | **16.45** | 60.8 |
-|  | tuned | 2.25 | 3.80 | 1.51 | 2.53 | 1.01 | 1.57 | **12.68** | 78.9 |
+| 4K | stock | 3.37 | 4.32 | 1.18 | 3.35 | 1.74 | 1.83 | **15.79** | 63.3 |
+|  | tuned | 2.26 | 3.82 | 1.04 | 2.58 | 1.57 | 1.51 | **12.78** | 78.3 |
+| 32K | stock | 3.87 | 4.91 | 1.51 | 3.62 | 0.96 | 1.99 | **16.86** | 59.3 |
+|  | tuned | 2.29 | 3.89 | 1.23 | 2.66 | 1.08 | 1.59 | **12.74** | 78.5 |
+| 128K | stock | 3.21 | 4.08 | 1.69 | 3.15 | 1.30 | 1.91 | **15.33** | 65.2 |
+|  | tuned | 2.40 | 4.05 | 1.63 | 2.68 | 1.46 | 1.73 | **13.95** | 71.7 |
 
-- **Prompts read 2.1–2.3× faster**: 449 → 926, 758 → 1,729, 861 → 1,968 tok/s at 4K / 32K / 128K. Mostly the GDN phase (594 → 153 ms per 1,000 tokens at 32K: FP16 in and out plus the rocBLAS solution table); the hc read and the QSA projections shrink too; the experts barely move (278 → 213 ms, only the router and shared expert change).
-- **Decode 1.23–1.30× faster**: 62.6 → 77.4, 65.1 → 79.8, 60.8 → 78.9 tok/s. Every phase is a little shorter; the hc read and router most (3.4 → 2.3 ms per token, the persistent hc read); the rest comes from the short draft with two pipeline windows and the shared-expert fork.
+- **Prompts read 2.1–2.4× faster**: 451 → 947, 758 → 1,731, 862 → 2,088 tok/s at 4K / 32K / 128K (on 10-13 the same comparison on 0.1.43.1 was 2.06 / 2.28 / 2.29×). Mostly the GDN phase (596 → 160 ms per 1,000 tokens at 32K: FP16 in and out plus the rocBLAS solution table); the hc read and the QSA projections shrink too. New since 10-13: the QSA selection + attention phase (99 → 68 at 32K, 122 → 63 at 128K, against 90 / 87 on 10-13) - the SIMT=2 scorer (#3073) and the RDNA2 prompt attention (#3381), which is why 128K gains the most. The experts barely move (271 → 210).
+- **Decode 1.10–1.32× faster**: 63.3 → 78.3, 59.3 → 78.5, 65.2 → 71.7 tok/s (timing switches on; without them 80 / 79 / 74, E504). The hc read and router most (3.4–3.9 → 2.3 ms per token, the persistent hc read), the routed experts and the draft/commit next; the rest is the short draft with two pipeline windows.
 
-**Where each change sits** (the rows come from different versions and measurements and **do not multiply**; the charts above are the combined effect on one version)
+**Where each change sits** (the rows come from different versions and measurements and **do not multiply**; the charts above are the combined effect, stock 0.2.0-beta against the production)
 
 | Phase | Change | Source | Measured (version) | Status |
 |---|---|---|---|---|
 | prompt: dense GEMMs | the 16-bit GEMMs in FP16 in and out (`STRATA_HIP_PROMPT_F16=1`) | [#835](https://github.com/Niko1221/Strata/pull/835) | prompt ≈2× (0.1.39) | upstream, off by default |
-| prompt: dense GEMMs | a rocBLAS solution table for gfx1030 | [#1167](https://github.com/Niko1221/Strata/pull/1167) | 1K +13.9%, 4K +12.1% (0.1.43.1, 10 pairs) | open |
+| prompt: dense GEMMs | a rocBLAS solution table for gfx1030 | [#1167](https://github.com/Niko1221/Strata/pull/1167) | 1K +13.9%, 4K +12.1% (0.1.43.1, 10 pairs) | upstream (0.2.0) |
 | prompt: QSA attention | 8 cells per step + DPP lane exchanges | #849 → 0.1.40.2 | +6–12% (0.1.40) | upstream, on (both sides) |
-| prompt: QSA selection | the block scorer on SGEMM (production) / the FP32 tiled kernel (the PR that replaces it) | [#1151](https://github.com/Niko1221/Strata/pull/1151) | 128K +3.2%, 32K +0.6% (0.1.43.1, 10 pairs) | open |
-| prompt: overall | `STRATA_SPLIT_MTP_BATCH=1` | upstream switch | 4K / 32K / 128K +4 / +7 / +2% (0.1.42) | switch |
+| prompt: QSA selection | the FP32 tiled block scorer on HIP (`STRATA_SELECT_SIMT=1`) | [#1151](https://github.com/Niko1221/Strata/pull/1151) | 128K +3.2%, 32K +0.6% (0.1.43.1, 10 pairs) | upstream (0.2.0) |
+| prompt: QSA selection | #2071's simt2 scorer on HIP too (`STRATA_SELECT_SIMT=2` fell back silently) | [#3073](https://github.com/Niko1221/Strata/pull/3073) | 119K −6.5%, 31K −1.35% (0.2.0-beta, 10 pairs) | open |
+| prompt: QSA attention | a gfx103x prompt-attention kernel (no split and merge; `STRATA_PROMPT_ATTN_RDNA2=1`) | [#3381](https://github.com/Niko1221/Strata/pull/3381) | 31K / 119K −3.49% (0.2.0-beta, 10 pairs) | open |
+| prompt: short reads | the CPU share beside `--batch` (`STRATA_PREFILL_CPU_SHARE_BATCH=1`) | [#3382](https://github.com/Niko1221/Strata/pull/3382) | reads < 2,048 tokens −28.8% (0.2.0-beta, 10 pairs) | open |
+| prompt: short reads | `STRATA_PREFILL_STREAM_MIN=2048` | upstream switch | real text 1.1–1.5K −6~17% (0.1.45, E485) | switch |
+| prompt: overall | `STRATA_SPLIT_MTP_BATCH=1` | upstream switch | 4K / 32K / 128K +4 / +7 / +2% (0.1.42) | off since 10-15 (with batch slots) |
 | decode: drafting | `--spec 3 --spec-min-p 0.7 --pipeline-windows 2` | configuration | 4K +10–16%, 32K +8–11% (0.1.41, E387) | configuration |
-| decode: hc read | the verifier's hc read as one persistent kernel | [#2226](https://github.com/Niko1221/Strata/pull/2226) | per window 4K −6.6%, 32K −4.4% (0.1.43.1, 10 pairs) | open |
-| decode: shared expert | the shared-expert stream fork (calibrate decides it per PC) | [#1992](https://github.com/Niko1221/Strata/pull/1992) | 4K +8.0%, 32K +9.5% (0.1.43.1, 10 pairs) | open |
+| decode: hc read | the verifier's hc read as one persistent kernel | [#2226](https://github.com/Niko1221/Strata/pull/2226) | per window 4K −6.6%, 32K −4.4% (0.1.43.1, 10 pairs) | upstream (0.2.0) |
+| decode: lone request | keep `--pipeline-windows` beside batch slots (`STRATA_PW_WITH_BATCH=1`) | [#3095](https://github.com/Niko1221/Strata/pull/3095) | 4K +16.1%, 32K +12.3% (0.2.0-beta, 10 pairs) | open |
+| decode: two requests | pipelined MTP in the batch groups (`STRATA_PIPED_MTP=2`, JacobSussan) | upstream #2985 | two streams +13% (0.1.45, E481) | open PR, ported |
+| decode: shared expert | the shared-expert stream fork (calibrate decides it per PC) | [#1992](https://github.com/Niko1221/Strata/pull/1992) | 4K +8.0%, 32K +9.5% (0.1.43.1, 10 pairs) | upstream (0.2.0) |
 | start-up | the PLE table locked in RAM (`--ple-io ram`) + `STRATA_IO_THREADS=128` | configuration | first-chunk wait 600 → 306 ms (threads) → 10 ms (locked) | configuration |
 | stability | `STRATA_HIP_ADAPT_KERNEL_COPY=1` | upstream switch (#884) | 128K stalls 3/3 → 0/3 | switch |
 
