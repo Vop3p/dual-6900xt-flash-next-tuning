@@ -45,7 +45,7 @@ the official `rdna2` package 0.1.48 unchanged. Strata's standard benchmark (`str
 | (not `STRATA_SH_STREAM`) | on Windows it slows decode and, together with KV streaming, stopped the engine ([#3895](https://github.com/Niko1221/Strata/pull/3895)) | |
 
 Pictures: the package's CPU reader answered a test image (an invoice number, an amount, two shapes) correctly in 4–5 s.
-The GPU reader (`--vision gpu`) was not measured.
+The package's GPU reader (`strata-vision-hip.exe`) is built for gfx1200 / gfx1201 only and refuses gfx1030 (`--vision gpu` stops the server), so the script uses the CPU reader.
 
 ## Before you judge the speed
 

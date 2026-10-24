@@ -11,12 +11,12 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/speed-chart-dark.png">
-  <img alt="读 prompt 与解码速度逐步变化：llama.cpp 10-02 到 Strata 0.1.45 + 补丁 10-20" src="docs/speed-chart-light.png" width="100%">
+  <img alt="读 prompt 与解码速度逐步变化：llama.cpp 10-02 到 Strata 0.2.3 + 补丁 10-23" src="docs/speed-chart-light.png" width="100%">
 </picture>
 
-*各生产状态的读 prompt（4K、32K–37K、128K，左轴）和解码（右轴）tok/s。各点来自不同实验、条件不完全相同（前两步的 4K 点是 5K prompt；最后一点是 E504，即 10-20 的生产跑 E415 同款负载；其余见交互页图下说明）；虚线段表示那一步没测这个指标。*
+*各生产状态的读 prompt（4K、32K–37K、128K，左轴）和解码（右轴）tok/s。各点来自不同实验、条件不完全相同（前两步的 4K 点是 5K prompt；最后两点是 E504 和 E533，即 10-20 和 10-23 的生产跑 E415 同款负载；其余见交互页图下说明）；虚线段表示那一步没测这个指标。*
 
-在一台家用机器（**2× AMD RX 6900 XT，gfx1030，各 PCIe 4.0 x8 / Ryzen 5 5600X / 128 GB DDR4**，ROCm 10.0）上跑 **Qwen3.8-Flash-Next（GSQ-RCO IQ3_S）** 的调优记录，从 llama.cpp 到 [Strata](https://github.com/Niko1221/Strata)，2026-09-21 → 10-20。
+在一台家用机器（**2× AMD RX 6900 XT，gfx1030，各 PCIe 4.0 x8 / Ryzen 5 5600X / 128 GB DDR4**，ROCm 10.0）上跑 **Qwen3.8-Flash-Next（GSQ-RCO IQ3_S）** 的调优记录，从 llama.cpp 到 [Strata](https://github.com/Niko1221/Strata)，2026-09-21 → 10-24；另有一张 RX 6900 XT 在 Windows 11 上的调优（[第 5 节](#5-windows-单卡rx-6900-xt)）。
 
 `patches/llama.cpp/` 是基于上游 `159c651f5` 的 8 个 llama.cpp 补丁：1–7 是时间线里 `q8k ggml` 那一步背后的 RDNA2 MMQ 工作（更宽的 tile、mad24 缩放、Q8_K 式激活、dot 链头 VOP3P），8 是 q8_0 K cache 的 int8 QK^T flash-attention tile 内核；编译选项和实测见[其 README](patches/llama.cpp/README.md)（英文）；Strata 通过 `-DSTRATA_GGML_DIR` 吃到 MMQ 那几个。这些补丁都是在同一台机器用 llama.cpp 跑的稠密 **Qwen3.8-27B** 上做出来的，那条线见[第 4 节](#4-同一台机器上的稠密-27bqwen38-27bud-q5_k_xlllamacpp-qwen38-tp)。
 
@@ -51,8 +51,8 @@ AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，
 
 ## 0. 结论（先看这里）
 
-- **生产（10-19 20:30 起）**：`strata-145-pa-a6572b34` = Strata 上游 **0.1.45** + #2985 的流水 MTP（`STRATA_PIPED_MTP=2`，JacobSussan）+ 我们的 5 个补丁：开批槽时单路保留 `--pipeline-windows`（`STRATA_PW_WITH_BATCH=1`，[#3095](https://github.com/Niko1221/Strata/pull/3095)）、HIP 上接通 #2071 的 SIMT=2 打分（[#3073](https://github.com/Niko1221/Strata/pull/3073)）、`--batch` 下读 prompt 也用 CPU 分担（`STRATA_PREFILL_CPU_SHARE_BATCH=1`，[#3382](https://github.com/Niko1221/Strata/pull/3382)）、gfx103x 读 prompt 注意力内核（`STRATA_PROMPT_ATTN_RDNA2=1`，[#3381](https://github.com/Niko1221/Strata/pull/3381)）、rocBLAS 解的本机缓存；外加 `STRATA_PREFILL_STREAM_MIN=2048` 和自改的 llama.cpp ggml。之前的 PR（#1149、#1151、#1167、#1992、#2226）已在上游 main。两路并发（`"parallel": 2`）、双卡分层、IQ3_S 专家、int8 KV、`--spec 3 --spec-min-p 0.7 --pipeline-windows 2`。回退槽 `strata-split-prev` = 去掉注意力内核的同一套。
-- **现在的速度**（E504，E415 同款负载，无图片编码器，三次中位）：prompt **1,020 / 1,790 / 2,158** tok/s（4K / 32K / 128K；10-10 的 E415 是 985 / 1,792 / 2,046），单请求解码 **80 / 79 / 74**；两个请求同时跑合计 60–64 tok/s（E481），第二个请求首字 12 s → 0.5 s（E463–E470）。短 prompt：430 token 读 1.1 s（原来 1.7 s，E493）。同一台机器、同样设置下的上游 **0.2.0-beta** 原版（E503，社区报告 [#3426](https://github.com/Niko1221/Strata/pull/3426)）：自带套件 4K / 32K 979 / 1,662 tok/s，真实文本 119K 1,893，单请求解码 66——差距就是我们的补丁（每个都在上面的 PR 里用 0.2.0 重测过）。
+- **生产（10-23 13:27 起）**：`strata-023-b523b933` = Strata 上游 **0.2.3**（合并进 0.2.2 生产，无冲突）+ #2985 的流水 MTP（`STRATA_PIPED_MTP=2`，JacobSussan）+ 我们的 5 个补丁：开批槽时单路保留 `--pipeline-windows`（`STRATA_PW_WITH_BATCH=1`，[#3095](https://github.com/Niko1221/Strata/pull/3095)）、HIP 上接通 #2071 的 SIMT=2 打分（[#3073](https://github.com/Niko1221/Strata/pull/3073)）、`--batch` 下读 prompt 也用 CPU 分担（`STRATA_PREFILL_CPU_SHARE_BATCH=1`，[#3382](https://github.com/Niko1221/Strata/pull/3382)）、gfx103x 读 prompt 注意力内核（`STRATA_PROMPT_ATTN_RDNA2=1`，[#3381](https://github.com/Niko1221/Strata/pull/3381)）、rocBLAS 解的本机缓存；外加 `STRATA_PREFILL_STREAM_MIN=2048` 和自改的 llama.cpp ggml。配置钉 `--conversation-cache-mib 0`：0.2.3 默认按内存自动开会话缓存，本机单会话读 prompt 因此 4K 慢 3%、32K–128K 慢 1.4%（E533）。两路并发（`"parallel": 2`）、双卡分层、IQ3_S 专家、int8 KV、`--spec 3 --spec-min-p 0.7 --pipeline-windows 2`；10-21 起两卡降压 −81 mV @245 W（E522/E523：37 轮 0 次翻转；解码不随频率变，E507–E512）。回退槽 `strata-split-prev` = 0.2.2 合并版（`strata-022-34cd8534`）。10-20 以来引擎 0.1.45 → 0.2.1.3（E516/E517）→ 0.2.2（E527）→ 0.2.3（E533），每一步速度和 KL 都与上一版持平。
+- **现在的速度**（E533，E415 同款负载，生产配置去图片编码器，两轮）：prompt **1,008 / 1,800 / 2,171** tok/s（4K / 32K / 128K；10-20 生产的 E504 是 1,020 / 1,790 / 2,158，10-10 的 E415 是 985 / 1,792 / 2,046），单请求解码 **75 / 79 / 78**（E504：80 / 79 / 74）；两个请求同时跑合计 60–64 tok/s（E481），第二个请求首字 12 s → 0.5 s（E463–E470）。短 prompt：430 token 读 1.1 s（原来 1.7 s，E493）。同一台机器、同样设置下的上游 **0.2.0-beta** 原版（E503，社区报告 [#3426](https://github.com/Niko1221/Strata/pull/3426)）：自带套件 4K / 32K 979 / 1,662 tok/s，真实文本 119K 1,893，单请求解码 66——差距就是我们的补丁（每个都在上面的 PR 里用 0.2.0 重测过）。
 - **从 llama.cpp 到 Strata 的总账**（同一份 IQ3_S）：解码 26 → 约 80 tok/s（≈3×），32K–37K prompt 274 → 1,790（≈6.5×），128K 821（0.1.39）→ 2,158。其中换引擎占大头，之后我们的补丁和配置让 prompt 大约翻倍（37K 714 → 1,433 → 1,705；10-20 的 32K 1,790、128K 2,158），解码约 +40%（56–58 → 80）。
 - **已经到地板的（别再试）**：解码的配置级杠杆**单独调**全部否定——`--kv-resident` 缩小（E382）、单开 `--pipeline-windows 2`（E384，+1–6%）、pipeline-windows 1 下的 `--spec`/`--spec-min-p` 16 点网格（E385/b，4/0.5 是峰值）；**但组合有效**：`--spec 3 --spec-min-p 0.7 --pipeline-windows 2` 解码 4K +10–16%、32K +8–11%（E387，三轮确认；短草稿接受率 83% vs 68%，第二窗的推测才命中），prompt 不变，输出跨启动不确定（基线是确定的），128K 在无编码器配置下 +11%（E388）；10-09 00:16 上生产；并发批槽（10-08 结论：常驻专家 41% < 上游门槛 50%，槽里不带 MTP；**10-15 推翻**：加上槽位草稿、单路保留流水窗口和后来的 #2985，`"parallel": 2` 已是生产）；IQ3_S 的 MMQ 分块/stream-K（E279/E280）；`--prefill` chunk 8192 即甜点（E296）；上游的 GDN 分块、Foresight、STAGE_PIN（上游自测对小卡无益或有害）。
 - **还有空间的**：长 prompt 的 PCIe 拓扑（保持 x8/x8：Strata 上长 prompt 等 PCIe 只占 0.2–0.7%，但 <2K 的短 prompt 占 43–54%，E482）；解码时每窗多换入专家（E499：自适应缓存命中已 85%，完美的 8 窗预测器在现在的换入量下也不更好——杠杆是换入预算，未测）。四个 PR 在 0.2.0-beta 上等上游审（#3381、#3382，以及 10-20 带 E503 数据重开的 #3073 / #3095）。
@@ -171,6 +171,11 @@ AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，
 | 10-19 20:30 | `STRATA_PROMPT_ATTN_RDNA2=1`（我们的，E495–E498e）：gfx103x 读 prompt 的注意力借用解码内核（64 单元切块 + 合并）；改为每（查询，KV 头）一个 block、在线 softmax、加权阶段每线程 4 维 | 每 8,192 token 块注意力 500 → 355 ms，34K / 133K −3.5%；质量门（8 段对 FP64 注意力参照）不劣；生产 `strata-145-pa-a6572b34`；PR #3381 |
 | 10-19 22:15 | SeqMoE 式专家预取先测上界（E499）：4 段真实 agent 对话的 26.6 万条路由记录回放 | 自适应缓存命中已 85.3 / 85.1%（高于全知静态集）；按现在的换入量，完美的 8 窗预测器也不更好——放弃；杠杆是每窗换入量（未测） |
 | 10-20 | 补丁按上游新规在 0.2.0 main 上复测（E501–E503）：setup.py 构建、默认路径逐字节、ctest 对照 main、10 对交错冷启动、FP64 参照质量门、CUDA 13.2 编译 | RDNA2 注意力 31K / 119K −3.49%（各 10/10）；CPU 分担 <2048 −28.8%（10/10）；送 #3381 / #3382。#3073 在 0.2.0 上 119K −6.5%，#3095 单路解码 +12~16%（各 10/10，E503） |
+| 10-20 16:40 | 生产 → 上游 0.2.1.3 + #2985 移植 + 我们的 5 个补丁（`strata-0213-40d9a2dc`，E516/E517） | 读 prompt −0.2~−0.8%、解码在噪声内，0 停转；KL 0.034 / 0.029 对旧 0.026（逐段看是重分布不是变差） |
+| 10-21 10:17 | 两卡降压 −81 mV @245 W（E522/E523） | 37 轮 0 次翻转（card1 到 −88 就有翻转）；解码不随频率变（E507–E512） |
+| 10-22 18:47 | 生产 → 0.2.2 合并（`strata-022-34cd8534`，E527） | KL 0.028 / 0.030 对 0.031，8 段里 7 段逐位相同；速度持平 |
+| 10-23 13:27 | 生产 → 0.2.3 合并（`strata-023-b523b933`，E533），钉 `--conversation-cache-mib 0` | 0.2.3 默认开的会话缓存让单会话读 prompt −3% / −1.4%；钉住后 1,008 / 1,800 / 2,171，解码 75 / 79 / 78，与 0.2.2 持平 |
+| 10-24 | 一张 RX 6900 XT 在 Windows 11 上（[第 5 节](#5-windows-单卡rx-6900-xt)） | 官方包只改设置：16K 读 prompt 479 → 1,076、解码 28 → 42，12/12；PR [#4005](https://github.com/Niko1221/Strata/pull/4005)、[#4006](https://github.com/Niko1221/Strata/pull/4006)，报告 [#4012](https://github.com/Niko1221/Strata/pull/4012) |
 
 ## 2. 机制上学到的
 
@@ -265,6 +270,38 @@ AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，
 - rocprofv3 下 `llama-server` 不响应 SIGINT/SIGTERM（追踪器的信号处理），追踪库其实早已落盘，白等 30 分钟。库出现后直接 SIGKILL。
 - E411 的证伪条件（"内核时间 < 墙钟 60%"）满足了，却回答不了"切哪块"；条件应写成"最大块 ≥30% 且离硬件上限 ≥25%"。
 
-## 5. 仓库里的 27B 原始材料
+## 5. Windows 单卡（RX 6900 XT）
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/win1x-chart-zh-dark.png">
+  <img alt="Windows 11 上一张 RX 6900 XT 一步步调优：4K / 16K 读 prompt 与 4K 解码，从默认设置到实测设置再到 #4005" src="docs/win1x-chart-zh-light.png" width="100%">
+</picture>
+
+*Strata 标准基准（`strata bench run`，三次中位，每一步都 12/12），每一步一次完整运行，原始数据在 Strata PR [#4012](https://github.com/Niko1221/Strata/pull/4012)。前六步都是官方 `rdna2` 引擎包 0.1.48 原样；最后一点（虚线）是 `main` + [#4005](https://github.com/Niko1221/Strata/pull/4005) 在本机自编、chunk 用 auto（6,144），所以 16K 低于前一点的 8,192 chunk。*
+
+第二台机器（IanLAB：i9-10900K，64 GB DDR4-3600，一张 RX 6900 XT 16 GB，PCIe 3.0 x16，Windows 11，同一个 IQ3_S 模型，64K 上下文），10-23 → 10-24。Strata 从 0.2.2 起在更新源里放了 RX 6000 的 Windows 引擎包（`windows-x86_64-hip-rdna2`），发布说明写"编了但没在真卡上试"；这里是它在真卡上的结果。**不用编译、照下面设置一键装好的脚本：[`windows-rx6000/`](windows-rx6000/)**（官方 Terminal、官方包、存一个 `strata launch` 预设）。
+
+**最后到了哪里（标准基准，官方包，只改设置）：**读 prompt 4K / 16K **452 / 479 → 586 / 1,076** tok/s，解码 **28 → 42** tok/s，短 prompt 首字 2.8 → 1.1 s，12/12。再加 #4005，4K 读到 793。对比同型号卡在 Linux 上（E540，单卡）：Windows 原来读 prompt 582 / 811（4K / 32K）、解码 36.9，Linux 944 / 1,160、47.4；调完 32K 读到 1,163，Linux 是 1,165（8,192 chunk，带拷贝事件补丁和 #3381 / #3073 的本地构建），解码 43–47。
+
+**测出来的东西，按影响大小排**
+
+- **WDDM 下每次提交约 80–120 µs（E541）。**同一个 HIP 小程序在两个系统、同型号卡上跑：背靠背拷 2.79 MB 的块，Windows 并不慢（12.5 对 14.1 GB/s，每次固定开销 5.5 µs）；但拷贝流上每记一个事件多 79 µs（Linux 3），每次跨流等待多 43 µs（Linux 约 0），一次拷贝加回调通知端到端多约 120 µs；发了 kernel 不跟一次 query，它甚至不会下发到 GPU。能缩短这笔开销的"硬件加速 GPU 计划"在 RX 6000 驱动里是 `AlwaysOff`。下面每一条都是这笔开销在不同地方出现。
+- **解码：PCIe 份额（E538、E545、E547）。**启动时的规则只按链路带宽定 PCIe 份额（12.6 GB/s → 0.35）。扫 0 / 0.1 / 0.2 / 0.3 / 0.35：0.2 是唯一的峰，解码 **+29%**。Strata 自带的运行时细化（`STRATA_PCIE_FRAC_DEFAULT=auto`，只在 gfx12 默认开）自己就收敛到 0.20，因为这台 CPU 算专家（29.4 GB/s）比链路搬得快；在 Linux 那台上它同样收敛到 0.20，解码 +1–2%。已在 [#4007](https://github.com/Niko1221/Strata/issues/4007) 提议 gfx103x 默认开。
+- **长 prompt：chunk 大小（E543、E548）。**Windows HIP 上 `--prefill auto` 卡在 6,144，因为 8,192 在一张 RX 7900 XTX、262K 上下文下崩过（[#1630](https://github.com/Niko1221/Strata/issues/1630)）。这里 8,192 六次冷启动都没出问题，其中三次是 `--max-context 262144`、27K 和 100K 的 prompt；32K 读 prompt **+17%**（流式 6 遍变 4 遍）。
+- **短 prompt：拷贝事件（E542、E544）。**读 prompt 路径每流一个专家就记一个事件、等一次释放事件，而消费端每 16 个专家一组只等一次。两个 opt-in 开关去掉其中 15/16：**4K +36.4%、32K +14.9%，10/10 对**；Linux 上输出逐字节相同、速度不变。PR [#4005](https://github.com/Niko1221/Strata/pull/4005)。
+- **显存余量。**16 GB 卡上 Windows 默认留 2,560 MiB；加载后剩下的约等于保留值减 250–340 MiB，剩下不到约 1 GiB 的运行都换页了（700：12 题 0/12）。1,536 是最低的稳定值。再多留一些代价起初不大：每多 512 MiB 少约 265 个专家槽；2,048 读 prompt 慢 1%、解码在噪声内，2,560 的 32K 解码慢 6–8%，3,072 的 4K 解码慢 7%、32K 慢 9–13%（E553，每档两次）。
+- **显示器。**两台 4K 显示器接在卡上时，桌面合成器占了 2.2 GB 显存；挪到核显后，同样的保留值下专家缓存从 3,121 槽涨到 3,672 槽，重启后卡上只剩引擎。测试时浏览器在放视频，解码掉了三分之一。
+- **看图。**包里带图片编码器；CPU 版读一张测试图 4–5 s、全对。同一个包里的 GPU 版（`strata-vision-hip.exe`）只为 gfx1200 / gfx1201 编译：设 `gpu: true` 就报 `this GPU (gfx1030) is not in the picture reader's build (gfx1200,gfx1201)`，服务直接退出，不退回 CPU 版（E554）。RX 6000 上用 `--vision cpu`。
+- **没用的：**大页（64 GB 内存拿不出 47 GB 连续的 2 MB 页，错误 1450）；Linux 上调的 rocBLAS 表（Windows 运行时全部拒绝；在 Windows 上调的表只对 ~1K 以内的新 prompt 有用，−7.6%）；`STRATA_SH_STREAM`（Windows 上解码变慢，和 KV 流式一起用会让引擎停掉，[#3895](https://github.com/Niko1221/Strata/pull/3895)）；本机自编引擎（和官方包一样快，E537）。
+
+**在这条线上犯过的错（留着，下次不再犯）**
+
+- 把 `STRATA_PREFILL_TIMING` 的读数当真了一天：它自己每个专家记一个事件，在 Windows 上让 32K 读 prompt 慢 8%，还把约 3.3 s 的等拷贝记成了"dequant"。修正是 [#4006](https://github.com/Niko1221/Strata/pull/4006)；修之前"Windows 上 dequant 慢 3 倍"是测量工具造出来的。
+- 猜 `--prefill auto` 卡在 6,144 是因为卡上槽太少借不出；引擎启动时就打印了原因（#1630）。解释一个数之前先读代码或日志。
+- 先拿专家槽数解释解码差距（E535–E537），又说份额公式缺了 WDDM 延迟（E541）；实测答案是启动时的份额没看 CPU 有多快（E545）。
+- 一组 A/B 里有三臂是在电脑上放视频时测的（解码 −33%）；现在开跑前先确认没人在用这台机器。
+- 配 GPU 图片编码器时漏了 `gpu: true`，看它跑在 CPU 上就怪 16 GB 显存不够；编码器只有被要求才会用 GPU，要求之后才看到真正的限制：它根本没为 gfx1030 编译。
+
+## 6. 仓库里的 27B 原始材料
 
 `bench/results/e410`、`e411`、`e412`：补丁 8 的 P/F 冷启动交替 A/B（脚本、报告、KLD/perf 运行）、rocprofv3 解码饼图与间隙分析（脚本及其文本输出；300–800 MB 的追踪库不含）、新旧二进制短上下文对照。
