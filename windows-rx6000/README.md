@@ -34,7 +34,8 @@ the official `rdna2` package 0.1.48 unchanged. Strata's standard benchmark (`str
 | | prompt 4K | prompt 16K | decode short / 4K / 16K | first token (short) | sanity |
 |---|---|---|---|---|---|
 | Strata's defaults | 452 tok/s | 479 tok/s | 28.8 / 28.3 / 28.4 tok/s | 2.81 s | 12/12 |
-| this preset | 586 tok/s | 1,076 tok/s | 44.5 / 42.3 / 41.3 tok/s | 1.11 s | 12/12 |
+| the preset without `STRATA_HOST_CORE` | 586 tok/s | 1,076 tok/s | 44.5 / 42.3 / 41.3 tok/s | 1.11 s | 12/12 |
+| this preset (with `STRATA_HOST_CORE=sibling`) | 612 tok/s | 1,087 tok/s | 43.8 / 42.4 / 42.5 tok/s | 1.09 s | 12/12 |
 
 | setting | why | measured |
 |---|---|---|
@@ -43,6 +44,7 @@ the official `rdna2` package 0.1.48 unchanged. Strata's standard benchmark (`str
 | `pcie-frac=0.2` | the share of missed experts the GPU reads over PCIe. The start-up rule only looks at the link (0.35 here); the CPU of this PC is faster than the link. Strata's own refinement (`STRATA_PCIE_FRAC_DEFAULT=auto`) arrives at the same 0.20 after ~48 answer steps. | decode +29% (0, 0.1, 0.2, 0.3, 0.35 swept) |
 | `prefill=8192` | prompt chunk size. `auto` stops at 6,144 on Windows because 8,192 crashed a 7900 XTX ([#1630](https://github.com/Niko1221/Strata/issues/1630)). On this RX 6900 XT 8,192 ran clean in six cold starts: 6 × 60K and 6 × 32K prompts at 64K context, and 3 × 27K and 3 × 100K prompts at 262,144 context (the setting #1630 crashed at). | 32K prompts +17% |
 | `STRATA_HIP_PROMPT_F16=1`, `STRATA_HIP_ADAPT_KERNEL_COPY=1`, `STRATA_PREFILL_CPU_SHARE=auto`, `STRATA_HC_PERSIST=1`, `STRATA_PIPED_CONCURRENT=1`, `STRATA_PREFILL_STREAM_MIN=2048`, `STRATA_IO_THREADS=128` | the documented opt-in prompt switches for gfx103x | prompt 4K / 16K 467 / 489 → 591 / 798 tok/s, first token (short) 2.4 → 1.1 s |
+| `STRATA_HOST_CORE=sibling` | the engine's host thread on the second logical processor of core 0 instead of the first, which Windows sends the GPU's interrupts to; the pool workers stay one per physical core. The engine log confirms it ("the host thread on 1 (--host-core sibling)"). | prompt 4K / 16K 586 / 1,076 → 612 / 1,087 tok/s, decode unchanged (one run each, 2026-10-24 and -25) |
 | (not `STRATA_SH_STREAM`) | on Windows it slows decode and, together with KV streaming, stopped the engine ([#3895](https://github.com/Niko1221/Strata/pull/3895)) | |
 
 ## Pictures on the GPU (`-Vision gpu`, optional)

@@ -17,8 +17,8 @@ this file is the short, actionable part. Numbers below are measurements from the
 Use `windows-rx6000/install-rx6000.ps1` (see its README). It only uses official Strata pieces and these settings:
 `vram-reserve-mib=1536`, `kv-resident=32768`, `pcie-frac=0.2`, `prefill=8192`, and the env switches
 `STRATA_HIP_PROMPT_F16=1 STRATA_HIP_ADAPT_KERNEL_COPY=1 STRATA_PREFILL_CPU_SHARE=auto STRATA_HC_PERSIST=1
-STRATA_PIPED_CONCURRENT=1 STRATA_PREFILL_STREAM_MIN=2048 STRATA_IO_THREADS=128`. Expected with Strata's standard
-benchmark: prompt 4K / 16K ≈ 586 / 1,076 tok/s, decode ≈ 42, 12/12 sanity. Check first: the monitor on the iGPU,
+STRATA_PIPED_CONCURRENT=1 STRATA_PREFILL_STREAM_MIN=2048 STRATA_IO_THREADS=128 STRATA_HOST_CORE=sibling`. Expected with Strata's
+standard benchmark: prompt 4K / 16K ≈ 612 / 1,087 tok/s, decode ≈ 42, 12/12 sanity. Check first: the monitor on the iGPU,
 a fixed page file about the size of RAM, the model on local NVMe.
 
 ## Reproduce: two cards on Linux (the production configuration)

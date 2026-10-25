@@ -112,7 +112,8 @@ $tuned = @(
     "STRATA_HC_PERSIST=1",
     "STRATA_PIPED_CONCURRENT=1",
     "STRATA_PREFILL_STREAM_MIN=2048",
-    "STRATA_IO_THREADS=128"
+    "STRATA_IO_THREADS=128",
+    "STRATA_HOST_CORE=sibling"               # the host thread on core 0's second logical processor, not on the one Windows sends GPU interrupts to: prompt 4K +4%
     # STRATA_SH_STREAM is left out on purpose: on Windows it slows decode and, with KV streaming, stopped the engine (#3895)
 )
 $setArgs = @()
