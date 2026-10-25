@@ -14,7 +14,7 @@ OUT = os.environ.get("OUT", os.path.join(ROOT, "docs"))   # where the PNGs go
 EN = json.load(open(sys.argv[1], encoding="utf-8")) if len(sys.argv) > 1 else {}
 SRC = open(os.path.join(ROOT, "index.html"), encoding="utf-8").read()
 # target -> (index of the <section> to keep, CSS width in px, extra CSS); the height is trimmed to the content afterwards
-TARGETS = {"now": (0, 1000, ""),
+TARGETS = {"now": (0, 1000, ".now-more{display:none!important}"),
            "speed-chart": (1, 1000, "section h2,section .panel+.foot,section p.foot{display:none!important}"),
            "win1x-chart": (3, 1000, "section h2,section .panel+.foot,section p.foot,section .panel .foot{display:none!important}")}
 

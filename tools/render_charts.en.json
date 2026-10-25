@@ -30,5 +30,12 @@
   "'解码 tok/s'": "'decode tok/s'",
   "读 prompt，4K（tok/s，上图）": "prompt 4K (tok/s, top)",
   "读 prompt，16K（tok/s，上图）": "prompt 16K (tok/s, top)",
-  "解码，4K（tok/s，下图）": "decode 4K (tok/s, bottom)"
+  "解码，4K（tok/s，下图）": "decode 4K (tok/s, bottom)",
+  "现在 · 2× RX 6900 XT · Qwen3.8-Flash-Next IQ3_S": "Now · 2× RX 6900 XT · Qwen3.8-Flash-Next IQ3_S",
+  "Strata 0.2.3 + 5 个补丁 · 2026-10-23 实测（E533）": "Strata 0.2.3 + 5 patches · measured 2026-10-23 (E533)",
+  "读 prompt tok/s": "prompt tok/s",
+  "4K–128K 为 75–79；两路并发合计 60–64": "75–79 across 4K–128K; two streams together 60–64",
+  "benchmark.py 合成负载，不开图片编码器，两轮 · 构建、开关与补丁见 docs/linux-dual-6900xt": "benchmark.py synthetic load, no vision encoder, two rounds · build, switches and patches: docs/linux-dual-6900xt",
+  "生产配置细节": "Production configuration",
+  "解码 tok/s": "decode tok/s"
 }
