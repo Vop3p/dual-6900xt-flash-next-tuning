@@ -277,11 +277,11 @@ AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，
   <img alt="Windows 11 上一张 RX 6900 XT 一步步调优：4K / 16K 读 prompt 与 4K 解码，从默认设置到实测设置再到 #4005" src="docs/win1x-chart-zh-light.png" width="100%">
 </picture>
 
-*Strata 标准基准（`strata bench run`，三次中位，每一步都 12/12），每一步一次完整运行，原始数据在 Strata PR [#4012](https://github.com/Niko1221/Strata/pull/4012)。前六步都是官方 `rdna2` 引擎包 0.1.48 原样；最后一点（虚线）是 `main` + [#4005](https://github.com/Niko1221/Strata/pull/4005) 在本机自编、chunk 用 auto（6,144），所以 16K 低于前一点的 8,192 chunk。*
+*Strata 标准基准（`strata bench run`，三次中位，每一步都 12/12），每一步一次完整运行，原始数据在 Strata PR [#4012](https://github.com/Niko1221/Strata/pull/4012)。前六步都是官方 `rdna2` 引擎包 0.1.48 原样；最后一点（虚线）是 `main` + [#4005](https://github.com/Niko1221/Strata/pull/4005) 在本机自编，同样 8,192 chunk（E559，12/12，这次不在 #4012 里）：4K 586 → 809、16K 1,076 → 1,125、解码 42 → 45.5。同一二进制用 auto chunk（6,144）时 16K 只有 979（#4012 里的 `…-c97e2108`）。*
 
 第二台机器（IanLAB：i9-10900K，64 GB DDR4-3600，一张 RX 6900 XT 16 GB，PCIe 3.0 x16，Windows 11，同一个 IQ3_S 模型，64K 上下文），10-23 → 10-24。Strata 从 0.2.2 起在更新源里放了 RX 6000 的 Windows 引擎包（`windows-x86_64-hip-rdna2`），发布说明写"编了但没在真卡上试"；这里是它在真卡上的结果。**不用编译、照下面设置一键装好的脚本：[`windows-rx6000/`](windows-rx6000/)**（官方 Terminal、官方包、存一个 `strata launch` 预设）。
 
-**最后到了哪里（标准基准，官方包，只改设置）：**读 prompt 4K / 16K **452 / 479 → 586 / 1,076** tok/s，解码 **28 → 42** tok/s，短 prompt 首字 2.8 → 1.1 s，12/12。再加 #4005，4K 读到 793。对比同型号卡在 Linux 上（E540，单卡）：Windows 原来读 prompt 582 / 811（4K / 32K）、解码 36.9，Linux 944 / 1,160、47.4；调完 32K 读到 1,163，Linux 是 1,165（8,192 chunk，带拷贝事件补丁和 #3381 / #3073 的本地构建），解码 43–47。
+**最后到了哪里（标准基准，官方包，只改设置）：**读 prompt 4K / 16K **452 / 479 → 586 / 1,076** tok/s，解码 **28 → 42** tok/s，短 prompt 首字 2.8 → 1.1 s，12/12。再加 #4005（本机自编，E559），4K / 16K 读到 809 / 1,125、解码 45.5。对比同型号卡在 Linux 上（E540，单卡）：Windows 原来读 prompt 582 / 811（4K / 32K）、解码 36.9，Linux 944 / 1,160、47.4；调完 32K 读到 1,163，Linux 是 1,165（8,192 chunk，带拷贝事件补丁和 #3381 / #3073 的本地构建），解码 43–47。
 
 **测出来的东西，按影响大小排**
 

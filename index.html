@@ -121,7 +121,7 @@ code{font-family:var(--f-data);font-size:.92em}
     <span><i class="dot" style="background:var(--l-decode)"></i>解码，4K（tok/s，下图）</span>
   </div>
   <div class="panel"><div class="chart" id="win1x"></div>
-  <p class="foot">Strata 标准基准（strata bench run，三次中位，12/12），每一步一次完整运行，原始数据在社区报告 PR #4012。前六步都是官方 rdna2 包 0.1.48 原样，只改设置；最后一点（虚线）是 main + 拷贝事件补丁 #4005 自编，chunk 用 auto（6144），所以 16K 低于前一点的 8192。保留 700 MiB 那次换页、12 题 0/12，不在曲线上。</p></div>
+  <p class="foot">Strata 标准基准（strata bench run，三次中位，12/12），每一步一次完整运行，原始数据在社区报告 PR #4012。前六步都是官方 rdna2 包 0.1.48 原样，只改设置；最后一点（虚线）是 main + 拷贝事件补丁 #4005 在本机自编，同样 8192 chunk（E559，10-24 21:06，12/12；不在 #4012 里）：4K 586 → 809、16K 1,076 → 1,125、解码 42 → 45.5。同一二进制用 auto chunk（6144）时 16K 只有 979，那次在 #4012 里。保留 700 MiB 那次换页、12 题 0/12，不在曲线上。</p></div>
 </section>
 
 <section>
@@ -225,7 +225,7 @@ const M=[
     {k:'+ 开关组\n（去 SH_STREAM）',p4:591,p16:798,d:35.4},
     {k:'+ Windows\nrocBLAS 表',p4:595,p16:799,d:35.5},
     {k:'pcie-frac 0.2\n+ prefill 8192',p4:586,p16:1076,d:42.3},
-    {k:'main + #4005\n（chunk auto）',p4:793,p16:979,d:42.6},
+    {k:'main + #4005\n+ prefill 8192',p4:809,p16:1125,d:45.5},
   ];
   const W=860,H=470,L=56,R=24,PT=20,PB=250,DT=286,DB=380;   // prompt panel PT..PB, decode panel DT..DB, step labels below
   const svg=el('svg',{viewBox:`0 0 ${W} ${H}`});

@@ -25,7 +25,7 @@
   "+ 开关组": "+ switches",
   "（去 SH_STREAM）": "(no SH_STREAM)",
   "rocBLAS 表": "rocBLAS table",
-  "（chunk auto）": "(auto chunk)",
+  "+ prefill 8192": "+ prefill 8192",
   "'读 prompt tok/s'": "'prompt tok/s'",
   "'解码 tok/s'": "'decode tok/s'",
   "读 prompt，4K（tok/s，上图）": "prompt 4K (tok/s, top)",
