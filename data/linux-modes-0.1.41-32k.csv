@@ -1,0 +1,13 @@
+tree,tree_en,mode,mode_en,prompt_32k_tok_s,decode_32k_tok_s
+stock,stock,单卡,one card,502,48.0
+stock,stock,helper,expert helper,503,66.5
+stock,stock,双卡分层,layer split,767,65.0
+两开关,two switches,单卡,one card,1102,51.6
+两开关,two switches,helper,expert helper,1103,74.9
+两开关,two switches,双卡分层,layer split,1619,74.6
+PRs,PRs,单卡,one card,1174,50.9
+PRs,PRs,helper,expert helper,1173,75.2
+PRs,PRs,双卡分层,layer split,1714,68.8
+E387,E387,单卡,one card,,
+E387,E387,helper,expert helper,,
+E387,E387,双卡分层,layer split,1707,82.3

@@ -1,0 +1,8 @@
+step,step_en,prompt_4k_tok_s,prompt_16k_tok_s,decode_4k_tok_s
+开箱默认,setup defaults,452,479,28.3
+显示器→核显,monitor → iGPU,445,470,29.1
+保留 1536 + KV 常驻,reserve 1536 + KV resident,467,489,33.3
++ 开关组（去 SH_STREAM）,+ switches (no SH_STREAM),591,798,35.4
++ Windows rocBLAS 表,+ Windows rocBLAS table,595,799,35.5
+pcie-frac 0.2 + prefill 8192,pcie-frac 0.2 + prefill 8192,586,1076,42.3
+main + #4005 + prefill 8192,main + #4005 + prefill 8192,809,1125,45.5

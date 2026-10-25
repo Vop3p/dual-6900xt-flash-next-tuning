@@ -1,0 +1,7 @@
+length,side,hc_read_ms_per_1k,gdn,qsa_projections,qsa_select_attention,experts,other,total_ms_per_1k,tok_s
+4K,stock,267,986,283,106,547,29,2217,451
+4K,tuned,122,283,76,79,478,18,1056,947
+32K,stock,163,596,169,99,271,22,1320,758
+32K,tuned,71,160,43,68,210,27,578,1731
+128K,stock,138,504,143,122,231,22,1160,862
+128K,tuned,57,130,35,63,171,24,479,2088

@@ -1,0 +1,27 @@
+# dual-6900xt-flash-next-tuning
+
+> Measured tuning of Qwen3.8-Flash-Next (GSQ-RCO IQ3_S, a MoE model) on AMD RX 6900 XT cards (RDNA2, gfx1030) with the Strata inference engine (https://github.com/Niko1221/Strata), 2026-09-21 to 2026-10-24: a two-card Linux box (ROCm 10.0) and one card under Windows 11; plus the dense Qwen3.8-27B on llama.cpp with eight RDNA2 llama.cpp patches. All numbers are measurements on these machines; estimates are marked. Experiment IDs (E123) refer to a private lab notebook.
+
+Start with AGENTS.md for how to reproduce and what not to retry. English docs are `*.md`, Chinese `*.zh-CN.md` (same content).
+
+## Docs
+- [README.md](README.md): one-page overview and which document fits which hardware.
+- [docs/linux-dual-6900xt.md](docs/linux-dual-6900xt.md): the two-card Linux production setup (engine build, patches, switches, arguments), current speed, where time goes (stock vs tuned phase breakdown), closed directions.
+- [docs/windows-one-card.md](docs/windows-one-card.md): one RX 6900 XT under Windows 11: WDDM per-submission cost, VRAM reserve, PCIe share, prompt chunk, copy events, pictures.
+- [windows-rx6000/README.md](windows-rx6000/README.md): the "lazy pack": a PowerShell script that installs the official Strata Terminal and rdna2 engine package with the measured settings; optional GPU picture reader.
+- [docs/27b-llamacpp.md](docs/27b-llamacpp.md): dense Qwen3.8-27B on llama.cpp (`-sm tensor`, two cards): production state, patches, profiling.
+- [patches/llama.cpp/README.md](patches/llama.cpp/README.md): the eight llama.cpp patches (RDNA2 MMQ, int8 QK^T flash attention), build flags, measured effects.
+- [docs/timeline.md](docs/timeline.md): every step with date and measured effect.
+- [docs/mechanisms.md](docs/mechanisms.md): mechanisms that limit speed on these cards, and mistakes made (so they are not repeated).
+
+## Data
+- [data/README.md](data/README.md): column descriptions for the CSV files below.
+- [data/linux-speed-steps.csv](data/linux-speed-steps.csv): prompt (4K / 32K / 128K) and decode tok/s at each production state.
+- [data/linux-breakdown-prompt-e505.csv](data/linux-breakdown-prompt-e505.csv), [data/linux-breakdown-decode-e505.csv](data/linux-breakdown-decode-e505.csv): per-phase time, stock vs tuned.
+- [data/windows-steps.csv](data/windows-steps.csv): Windows one-card standard-benchmark steps.
+- [data/linux-modes-0.1.41-32k.csv](data/linux-modes-0.1.41-32k.csv): one card vs expert helper vs layer split.
+- [data/timeline-steps.zh.csv](data/timeline-steps.zh.csv): every timeline step (Chinese).
+
+## Optional
+- [bench/](bench/): A/B scripts (run_ab.sh, benchmark.py, ab_compare.py, monitor_amd.py) and raw results per experiment in bench/results/eNNN/.
+- [index.html](index.html): interactive timeline page (Chinese), source of the charts; tools/render_charts.py renders the PNGs.
