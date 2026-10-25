@@ -2,7 +2,8 @@
 
 For an **RX 6800 / 6800 XT / 6900 XT / 6950 XT (gfx1030)** or **RX 6700 XT (gfx1031)** on Windows 10/11.
 It uses only official Strata pieces: the Terminal's installer and the signed **`rdna2`** engine package from the update
-feed (in the releases since 0.2.2). Nothing is compiled and no binary comes from this repository.
+feed (in the releases since 0.2.2). Nothing is compiled and no binary comes from this repository, except with the
+optional `-Vision gpu` (pictures on the card), which downloads one file built here from the official source (see below).
 
 ```powershell
 # in PowerShell, with the model files you already have:
@@ -21,7 +22,7 @@ What [`install-rx6000.ps1`](install-rx6000.ps1) does, in order:
    engine package (with `STRATA_ENGINE_BACKEND=hip-rdna2` for that step only, so a PC with a second AMD GPU, such as a
    Ryzen APU's Radeon 760M / 780M, cannot end up with another card family's package);
 3. sets the model up with `strata launch` and saves a preset (`rx6000-tuned`) with the settings below, pictures on
-   (the CPU picture reader that ships in the package);
+   (the CPU picture reader that ships in the package; `-Vision gpu` adds a GPU one, [below](#pictures-on-the-gpu--vision-gpu-optional));
 4. starts it. Every setting is an official `strata launch --set` value; `-Stock` saves Strata's defaults instead.
 
 ## What the settings change
@@ -44,8 +45,47 @@ the official `rdna2` package 0.1.48 unchanged. Strata's standard benchmark (`str
 | `STRATA_HIP_PROMPT_F16=1`, `STRATA_HIP_ADAPT_KERNEL_COPY=1`, `STRATA_PREFILL_CPU_SHARE=auto`, `STRATA_HC_PERSIST=1`, `STRATA_PIPED_CONCURRENT=1`, `STRATA_PREFILL_STREAM_MIN=2048`, `STRATA_IO_THREADS=128` | the documented opt-in prompt switches for gfx103x | prompt 4K / 16K 467 / 489 → 591 / 798 tok/s, first token (short) 2.4 → 1.1 s |
 | (not `STRATA_SH_STREAM`) | on Windows it slows decode and, together with KV streaming, stopped the engine ([#3895](https://github.com/Niko1221/Strata/pull/3895)) | |
 
-Pictures: the package's CPU reader answered a test image (an invoice number, an amount, two shapes) correctly in 4–5 s.
-The package's GPU reader (`strata-vision-hip.exe`) is built for gfx1200 / gfx1201 only and refuses gfx1030 (`--vision gpu` stops the server), so the script uses the CPU reader.
+## Pictures on the GPU (`-Vision gpu`, optional)
+
+By default pictures are read by the package's CPU reader: a test image (an invoice number, an amount, two shapes) correct
+in 4–5 s, big pictures cut to 300 image tokens. The package also carries a GPU reader (`strata-vision-hip.exe`), but its
+code is for gfx1200 / gfx1201 only, so on an RX 6000 card it does not start ([#4017](https://github.com/Niko1221/Strata/issues/4017)).
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-rx6000.ps1 -ModelPath D:\models\iq3_s -Vision gpu
+# later:
+strata runtime start --profile rx6000-tuned-gpu
+strata runtime stop  --profile rx6000-tuned-gpu
+```
+
+`-Vision gpu` sets everything up as above (the preset `rx6000-tuned`, pictures on the CPU), then:
+
+1. downloads **one file that is not from the official feed**: [`strata-vision-hip-rx6000-0.1.48.zip`](https://github.com/Vop3p/dual-6900xt-flash-next-tuning/releases/tag/rx6000-vision-0.1.48)
+   (18.7 MB), and stops unless its SHA-256 is the one in the script. It holds `strata-vision-hip.exe` built from the
+   official source of the 0.1.48 engine (commit `6f8800aefe27`, `tools/vision` unmodified) for gfx1030 / gfx1031, with the
+   same CMake line as `tools/hip/build_windows.bat` and the same ROCm (10.2.0a20260930) as the official package; its
+   `BUILD-vision.txt` says how, and the two MIT licenses (Strata, llama.cpp) are beside it. It is not signed.
+2. puts it in `%LOCALAPPDATA%\Strata\rx6000-vision\0.1.48\` with the HIP runtime DLLs copied from the official package
+   (the engine folder is left as the updater installed it);
+3. saves a copy of the preset's run config that uses it (with the CPU reader as its fallback) as the profile
+   `rx6000-tuned-gpu`, and starts that with `strata runtime start`.
+
+Measured on the RX 6900 XT above, the preset's settings, one cold start each (benchmark: two 4K prompts):
+
+| | expert-cache slots | prompt 4K | decode 4K | small picture (first / again) | big picture (first / again) | answers |
+|---|---|---|---|---|---|---|
+| pictures off | 4,161 | 589 tok/s | 44.5 tok/s | | | |
+| CPU reader (the preset) | 4,166 | not run | not run | 4.9 / 1.1 s ¹ | 7.0 / 2.2 s, 338 image tokens ¹ | all correct |
+| GPU reader (`-Vision gpu`) | 3,479 | 582 tok/s | 44.4 tok/s | 3.5 / 1.1 s | 7.6 / 2.2 s, 1,059 image tokens | all correct |
+
+¹ measured with `vram-reserve-mib=2048` instead of 1,536 (the CPU reader uses no VRAM, so the reserve does not touch it).
+
+The GPU reader takes about 1.3 GB of VRAM, which the engine gives up from the expert cache by itself. Its gain is detail:
+a big picture is read at up to 1,024 image tokens instead of 300. Check that it runs on the card: the engine log says
+`strata-vision: warmed up at 1024 image tokens`; if it ever says `on the CPU`, the CPU fallback took over.
+Building it yourself instead: `tools\hip\build_windows.bat` with `STRATA_HIP_ARCHS=gfx1030;gfx1031` (Visual Studio 2022
+Build Tools, Python, git, ~7 GB of ROCm wheels), then pass the zip of `build-vision-hip-win\bin\strata-vision-hip.exe` you
+made as `-GpuVisionZip` after putting its SHA-256 in the script.
 
 ## Before you judge the speed
 

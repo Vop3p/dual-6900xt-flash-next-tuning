@@ -291,7 +291,7 @@ AiBox：2× RX 6900 XT（gfx1030，各 PCIe 4.0 x8）/ Ryzen 5 5600X / 128 GB，
 - **短 prompt：拷贝事件（E542、E544）。**读 prompt 路径每流一个专家就记一个事件、等一次释放事件，而消费端每 16 个专家一组只等一次。两个 opt-in 开关去掉其中 15/16：**4K +36.4%、32K +14.9%，10/10 对**；Linux 上输出逐字节相同、速度不变。PR [#4005](https://github.com/Niko1221/Strata/pull/4005)。
 - **显存余量。**16 GB 卡上 Windows 默认留 2,560 MiB；加载后剩下的约等于保留值减 250–340 MiB，剩下不到约 1 GiB 的运行都换页了（700：12 题 0/12）。1,536 是最低的稳定值。再多留一些代价起初不大：每多 512 MiB 少约 265 个专家槽；2,048 读 prompt 慢 1%、解码在噪声内，2,560 的 32K 解码慢 6–8%，3,072 的 4K 解码慢 7%、32K 慢 9–13%（E553，每档两次）。
 - **显示器。**两台 4K 显示器接在卡上时，桌面合成器占了 2.2 GB 显存；挪到核显后，同样的保留值下专家缓存从 3,121 槽涨到 3,672 槽，重启后卡上只剩引擎。测试时浏览器在放视频，解码掉了三分之一。
-- **看图。**包里带图片编码器；CPU 版读一张测试图 4–5 s、全对。同一个包里的 GPU 版（`strata-vision-hip.exe`）只为 gfx1200 / gfx1201 编译：设 `gpu: true` 就报 `this GPU (gfx1030) is not in the picture reader's build (gfx1200,gfx1201)`，服务直接退出，不退回 CPU 版（E554）。RX 6000 上用 `--vision cpu`。
+- **看图。**包里带图片编码器；CPU 版读一张测试图 4–5 s、全对。同一个包里的 GPU 版（`strata-vision-hip.exe`）只为 gfx1200 / gfx1201 编译：设 `gpu: true` 就报 `this GPU (gfx1030) is not in the picture reader's build (gfx1200,gfx1201)`（E554，手写配置、没配 CPU 后备）。用官方源码为 gfx1030 / gfx1031 自编后能在显卡上跑（E555/E556）：4/4 全对，大图按 1,059 个图像 token 读（CPU 版 300），占约 1.3 GB 显存、引擎自动从专家缓存让出（3,479 对 4,166 槽；4K 解码 44.4 对 44.5，各一次）。懒人包加了 `-Vision gpu` 选项（[windows-rx6000](windows-rx6000/README.md#pictures-on-the-gpu--vision-gpu-optional)）。
 - **没用的：**大页（64 GB 内存拿不出 47 GB 连续的 2 MB 页，错误 1450）；Linux 上调的 rocBLAS 表（Windows 运行时全部拒绝；在 Windows 上调的表只对 ~1K 以内的新 prompt 有用，−7.6%）；`STRATA_SH_STREAM`（Windows 上解码变慢，和 KV 流式一起用会让引擎停掉，[#3895](https://github.com/Niko1221/Strata/pull/3895)）；本机自编引擎（和官方包一样快，E537）。
 
 **在这条线上犯过的错（留着，下次不再犯）**

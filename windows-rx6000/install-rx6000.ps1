@@ -23,7 +23,15 @@
   32k or 64k (default 64k). The settings below were measured at 64k on a 16 GB card.
 
 .PARAMETER Vision
-  on (default) or off. On reads pictures with the CPU picture reader.
+  on (default), gpu or off. On reads pictures with the CPU picture reader that ships in the package.
+  gpu reads them on the card with a GPU picture reader built for gfx1030 / gfx1031 from the official source (the package's
+  own GPU reader has code for gfx1200 / gfx1201 only): the one file this script downloads from this repository's releases,
+  checked against its SHA-256. It takes ~1.3 GB of VRAM, so the expert cache gets fewer slots (3,479 instead of 4,166 here;
+  decode 44.4 vs 44.5 tok/s at 4K in one run each); it reads big pictures at up to 1,024 image tokens instead of the CPU
+  reader's 300.
+
+.PARAMETER GpuVisionZip
+  With -Vision gpu: a local copy of the GPU picture reader's zip instead of the download (same SHA-256 check).
 
 .PARAMETER Preset
   The name of the saved preset (default rx6000-tuned). Start it again later with: strata launch --preset rx6000-tuned
@@ -38,11 +46,18 @@ param(
     [string]$ModelPath = "",
     [string]$Model = "iq3_s",
     [ValidateSet("32k", "64k")][string]$Context = "64k",
-    [ValidateSet("on", "off")][string]$Vision = "on",
+    [ValidateSet("on", "gpu", "off")][string]$Vision = "on",
     [string]$Preset = "rx6000-tuned",
-    [switch]$Stock
+    [switch]$Stock,
+    [string]$GpuVisionZip = ""
 )
 $ErrorActionPreference = "Stop"
+
+# The GPU picture reader for -Vision gpu: strata-vision-hip.exe from the official source of the 0.1.48 engine (commit 6f8800aefe27,
+# tools/vision, STRATA_VISION_HIP_ARCHS=gfx1030;gfx1031), against the same ROCm as the official rdna2 package.
+$GpuVisionUrl    = "https://github.com/Vop3p/dual-6900xt-flash-next-tuning/releases/download/rx6000-vision-0.1.48/strata-vision-hip-rx6000-0.1.48.zip"
+$GpuVisionSha256 = "d933a55c35c2e12ab1a1cf0c738da3cfc0c79bb95b1e5811a34ab64d3aad8c77"
+$GpuVisionRocm   = "10.2.0a20260930"
 
 function Step($text) { Write-Host ""; Write-Host "== $text" -ForegroundColor Cyan }
 function Fail($text) { Write-Host "[X] $text" -ForegroundColor Red; exit 1 }
@@ -105,12 +120,65 @@ if (-not $Stock) { foreach ($s in $tuned) { $setArgs += @("--set", $s) } }
 
 # --- 4. set up, save and start -------------------------------------------------------------------------------------
 Step "3/4  setting up the model and saving the preset '$Preset'"
-$launch = @("launch", "--model", $Model, "--context", $Context, "--vision", $(if ($Vision -eq "on") { "cpu" } else { "off" }),
+$launch = @("launch", "--model", $Model, "--context", $Context, "--vision", $(if ($Vision -eq "off") { "off" } else { "cpu" }),
             "--tune", "skip", "--save-preset", $Preset, "--yes", "--no-tui") + $setArgs
 if ($ModelPath) { $launch += @("--model-path", $ModelPath) }
 Write-Host ("strata " + ($launch -join " "))
 & $strata @launch
 if ($LASTEXITCODE -ne 0) { Fail "strata launch stopped (its message is above)" }
+
+if ($Vision -eq "gpu") {
+    # The preset above reads pictures on the CPU. Stop it, put the GPU reader in a folder of its own (the engine folder stays as the
+    # updater installed it), and save a copy of its run config that uses it, as a profile started with `strata runtime start`.
+    Step "3b/4 the GPU picture reader"
+    & $strata launch --stop --preset $Preset | Out-Host
+    $runCfg = Join-Path $env:LOCALAPPDATA "Strata\launch\$Preset.json"
+    if (-not (Test-Path $runCfg)) { Fail "the run config of '$Preset' is not at $runCfg" }
+    $cfg = Get-Content $runCfg -Raw | ConvertFrom-Json
+    if (-not $cfg.vision) { Fail "the run config of '$Preset' has no pictures section" }
+    $engDir = Split-Path $cfg.vision.exe
+    $build = Get-Content (Join-Path $engDir "BUILD.json") -Raw | ConvertFrom-Json
+    if ($build.rocm -ne $GpuVisionRocm) {
+        Fail "the engine package uses ROCm $($build.rocm); this GPU picture reader was built for $GpuVisionRocm. The preset '$Preset' (pictures on the CPU) is saved and works."
+    }
+    $zip = $GpuVisionZip
+    if (-not $zip) {
+        $zip = Join-Path $env:TEMP "strata-vision-hip-rx6000-0.1.48.zip"
+        Write-Host "Downloading $GpuVisionUrl"
+        Invoke-WebRequest $GpuVisionUrl -OutFile $zip -UseBasicParsing
+    }
+    $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+    if ($hash -ne $GpuVisionSha256) { Fail "the GPU picture reader's zip has SHA-256 $hash, expected ${GpuVisionSha256}: not used" }
+    $vdir = Join-Path $env:LOCALAPPDATA "Strata\rx6000-vision\$($build.version)"
+    New-Item -ItemType Directory -Force $vdir | Out-Null
+    Expand-Archive -Force $zip $vdir
+    # The HIP runtime and the C++ runtime beside the exe, from the official package (as there: before System32's)
+    Get-ChildItem $engDir -Filter *.dll | Copy-Item -Destination $vdir -Force
+    $vexe = Join-Path $vdir "strata-vision-hip.exe"
+    if (-not (Test-Path $vexe)) { Fail "strata-vision-hip.exe is not in $zip" }
+    $cpuExe = $cfg.vision.exe
+    $cfg.vision.exe = $vexe
+    $cfg.vision.gpu = $true
+    $cfg.vision | Add-Member -Force cpu_exe $cpuExe          # the server falls back to the CPU reader if the GPU one does not start
+    foreach ($k in "max_tokens", "threads") { $cfg.vision.PSObject.Properties.Remove($k) }  # the GPU reader's own defaults (up to 1,024 tokens)
+    $gpuCfg = Join-Path $vdir "$Preset-gpu.json"
+    $cfg | ConvertTo-Json -Depth 32 | Set-Content -Encoding UTF8 $gpuCfg
+    $gpuProfile = "$Preset-gpu"
+    $have = (& $strata profile list 2>$null | Out-String) -match "(?m)^$([regex]::Escape($gpuProfile))\s"
+    if ($have) { & $strata profile use-config $gpuProfile --from-config $gpuCfg | Out-Host }
+    else { & $strata profile create $gpuProfile --from-config $gpuCfg | Out-Host }
+    if ($LASTEXITCODE -ne 0) { Fail "strata profile could not save '$gpuProfile'" }
+    & $strata runtime start --profile $gpuProfile | Out-Host
+    if ($LASTEXITCODE -ne 0) { Fail "strata runtime start --profile $gpuProfile stopped (its message is above)" }
+    Step "4/4  done"
+    Write-Host "The model is serving, pictures on the GPU. Next time start it with:   strata runtime start --profile $gpuProfile"
+    Write-Host "Stop it with:                                                     strata runtime stop --profile $gpuProfile"
+    Write-Host "Pictures on the CPU instead (more expert-cache slots):               strata launch --preset $Preset"
+    Write-Host "Check that the GPU reader runs: the engine log says 'strata-vision: warmed up at ... image tokens'."
+    Write-Host "Before you judge the speed: put your monitor on the CPU's graphics (iGPU) if you have one, and close games,"
+    Write-Host "browsers with video and the Radeon overlay. They share the card's memory with the model (README.md)."
+    exit 0
+}
 
 Step "4/4  done"
 Write-Host "The model is serving. Next time start it with:   strata launch --preset $Preset"
