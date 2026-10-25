@@ -1,19 +1,21 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-lang="zh">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Flash-Next 调优时间线</title>
+<title>Flash-Next 调优时间线 · Flash-Next tuning timeline</title>
+<meta name="description" content="Measured tuning of Qwen3.8-Flash-Next (IQ3_S) on 2x AMD RX 6900 XT with Strata: speed at every step, what helped and what did not. Chinese / English.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-/* layout: a speed chart on top, then one vertical timeline; each step tagged by its line of attack (lane colour) and carrying its measured effect */
+/* layout: a sticky side column (title, language, sections, filters) beside the main column on wide screens; one column below 1100 px.
+   bilingual: every visible text exists as .zh and .en; html[data-lang] hides the other one. */
 :root{
   --bg:#f5f6f4; --panel:#ffffff; --ink:#1b2321; --muted:#5d6966; --rule:#d9dedb;
   --l-engine:#173f4f; --l-prompt:#2f7a8c; --l-decode:#6a5aa8; --l-stable:#b8691c; --l-drop:#9aa6a2;
   --good:#2f7a4b; --good-soft:#dcefe2; --bad:#a13d2d; --bad-soft:#f4dfda; --flat:#5d6966; --flat-soft:#e8ebe9;
-  --f-display:"Noto Serif SC","Songti SC",serif; --f-body:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif; --f-data:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --f-body:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif; --f-data:"IBM Plex Mono",ui-monospace,Menlo,monospace;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#121816; --panel:#1a2220; --ink:#e4ebe8; --muted:#9aa8a4; --rule:#2c3633;
@@ -23,41 +25,53 @@
   --bg:#121816; --panel:#1a2220; --ink:#e4ebe8; --muted:#9aa8a4; --rule:#2c3633;
   --l-engine:#a9dbe8; --l-prompt:#5fb3c6; --l-decode:#a99be0; --l-stable:#e09a4f; --l-drop:#6f7c78;
   --good:#6cc28c; --good-soft:#1e3326; --bad:#e2826f; --bad-soft:#3b221d; --flat:#9aa8a4; --flat-soft:#232c2a; color-scheme:dark}
+html[data-lang="zh"] .en, html[data-lang="en"] .zh{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.65}
-.wrap{max-width:980px;margin:0 auto;padding-inline:20px;padding-block:32px 64px;display:grid;gap:36px}
-.eyebrow{font-family:var(--f-data);font-size:12px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}
-h1{font-family:var(--f-display);font-size:clamp(26px,4vw,36px);line-height:1.25;margin:0;text-wrap:balance}
-h2{font-family:var(--f-display);font-size:21px;margin:0}
-p{margin:0;max-width:68ch}
-header,section{display:grid;gap:12px;min-width:0}
-.lede{color:var(--muted)}
-.panel{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:18px;display:grid;gap:12px;min-width:0}
-.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;color:var(--muted)}
+.layout{max-width:1240px;margin:0 auto;padding:28px 20px 64px;display:grid;gap:32px}
+@media (min-width:1100px){.layout{grid-template-columns:260px minmax(0,1fr);gap:40px;align-items:start}
+  aside{position:sticky;top:24px}}
+aside{display:grid;gap:14px;min-width:0}
+main{display:grid;gap:40px;min-width:0}
+.eyebrow{font-family:var(--f-data);font-size:11.5px;letter-spacing:.06em;color:var(--muted);text-transform:uppercase}
+h1{font-size:clamp(24px,3vw,30px);line-height:1.25;margin:0;font-weight:700;text-wrap:balance}
+h2{font-size:20px;margin:0;font-weight:700;line-height:1.35}
+p{margin:0;max-width:75ch}
+.panel p,.now-src,details p{max-width:none}
+section{display:grid;gap:12px;min-width:0;scroll-margin-top:16px}
+.lede{color:var(--muted);font-size:14px}
+.toggle{display:inline-flex;border:1px solid var(--rule);border-radius:999px;overflow:hidden;width:max-content}
+.toggle button{font:inherit;font-size:13px;padding:3px 12px;border:0;background:transparent;color:var(--muted);cursor:pointer}
+.toggle button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.toggle button:focus-visible,.filters button:focus-visible,nav a:focus-visible{outline:2px solid var(--l-prompt);outline-offset:2px}
+nav{display:grid;gap:2px;font-size:13.5px}
+nav a{color:var(--muted);text-decoration:none;padding:2px 0}
+nav a:hover{color:var(--ink)}
+@media (max-width:1099px){nav{display:none}}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:16px 18px;display:grid;gap:12px;min-width:0}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--muted)}
 .legend span{display:inline-flex;align-items:center;gap:6px}
-.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
-.chart{overflow-x:auto}
-.chart svg{display:block;width:100%;height:auto;min-width:600px}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex:none}
+.chart{overflow-x:auto;position:relative}
+.chart svg{display:block;width:100%;height:auto;min-width:640px}
 .chart text{font-family:var(--f-data);font-size:11px;fill:var(--muted)}
-.now-h{font-family:var(--f-body);font-weight:700;font-size:22px}
-.now-sub{margin:2px 0 12px;color:var(--muted);font-size:14px}
+.swipe{display:none;font-size:12px;color:var(--muted)}
+@media (max-width:700px){.swipe{display:block}}
+.tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:6px 10px;font-size:12.5px;line-height:1.5;box-shadow:0 2px 10px rgba(0,0,0,.12);white-space:nowrap;display:none;z-index:2}
+.tip b{display:block;font-size:12.5px}
+.tip span{display:flex;align-items:center;gap:6px;font-family:var(--f-data);font-size:12px}
+.now-sub{margin-top:-4px;color:var(--muted);font-size:14px}
 .now2{display:grid;grid-template-columns:3fr 1.25fr;gap:12px}
 .now2 .grp{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:12px 16px 14px;display:grid;gap:6px;min-width:0}
 .now2 .lbl{font-size:13px;color:var(--muted);font-weight:500}
 .now2 .row{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:12px}
 .now2 .row div{display:grid;gap:0}
-.now2 b{font-family:var(--f-body);font-variant-numeric:tabular-nums;font-size:34px;font-weight:700;line-height:1.15}
+.now2 b{font-variant-numeric:tabular-nums;font-size:34px;font-weight:700;line-height:1.15}
 .now2 small{color:var(--muted);font-size:12.5px;line-height:1.4}
-.now-src{margin-top:10px;max-width:none!important}
+@media (max-width:640px){.now2{grid-template-columns:1fr}.now2 b{font-size:28px}}
 .now-more summary{cursor:pointer;color:var(--muted);font-size:13px}
-@media (max-width:640px){.now2{grid-template-columns:1fr}}
-.now{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
-.now div{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:10px 12px;display:grid;gap:2px}
-.now b{font-family:var(--f-data);font-size:20px;font-weight:500}
-.now small{color:var(--muted);font-size:12.5px}
 .filters{display:flex;flex-wrap:wrap;gap:8px}
 .filters button{font:inherit;font-size:13px;padding:4px 12px;border-radius:999px;border:1px solid var(--rule);background:var(--panel);color:var(--ink);cursor:pointer;display:inline-flex;gap:6px;align-items:center}
 .filters button[aria-pressed="false"]{opacity:.45}
-.filters button:focus-visible{outline:2px solid var(--l-prompt);outline-offset:2px}
 .tl{display:grid;gap:0;position:relative}
 .day{font-family:var(--f-data);font-size:13px;color:var(--muted);padding:18px 0 8px 0;letter-spacing:.04em}
 .step{display:grid;grid-template-columns:64px 18px minmax(0,1fr);gap:12px;align-items:start}
@@ -67,104 +81,127 @@ header,section{display:grid;gap:12px;min-width:0}
 .rail i{position:absolute;left:3px;top:16px;width:12px;height:12px;border-radius:50%;border:2px solid var(--panel)}
 .card{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:12px 14px;margin-bottom:10px;display:grid;gap:6px;min-width:0}
 .card.drop{background:transparent;border-style:dashed}
-.card h3{margin:0;font-size:15px;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
-.lane{font-size:11.5px;font-family:var(--f-data);padding:0 7px;border-radius:3px;color:var(--panel)}
+.card h3{margin:0;font-size:15px;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;line-height:1.45}
+.lane{font-size:11.5px;font-family:var(--f-data);padding:0 7px;border-radius:3px;color:var(--panel);white-space:nowrap}
 .why{color:var(--muted);font-size:13.5px}
 .res{display:flex;flex-wrap:wrap;gap:6px}
-.pill{font-family:var(--f-data);font-size:12px;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.pill{font-family:var(--f-data);font-size:12px;padding:1px 8px;border-radius:999px}
 .pill.up{background:var(--good-soft);color:var(--good)}
 .pill.down{background:var(--bad-soft);color:var(--bad)}
 .pill.flat{background:var(--flat-soft);color:var(--flat)}
-.closed{display:grid;gap:6px;font-size:13.5px}
-.closed li{margin:0}
+.closed{display:grid;gap:8px;font-size:14px;margin:0;padding-left:20px;max-width:90ch}
 .foot{font-size:12.5px;color:var(--muted)}
 code{font-family:var(--f-data);font-size:.92em}
-@media (max-width:520px){.step{grid-template-columns:44px 18px minmax(0,1fr)}}
+@media (max-width:520px){.step{grid-template-columns:44px 18px minmax(0,1fr)}.layout{padding-inline:16px}}
 </style>
 </head>
 <body>
-<div class="wrap">
-<header>
+<div class="layout">
+<aside>
   <div class="eyebrow">AiBox · 2× RX 6900 XT · Qwen3.8-Flash-Next IQ3_S · 09-30 → 10-24</div>
-  <h1>Flash-Next 调优时间线</h1>
-  <p class="lede">同一个模型（IQ3_S）在这台机器上从 llama.cpp 换到 Strata，再一步步叠加改动。每一步写了当时为什么这么做和实测效果；虚线框是试过但没采用的方向。速度一律指双卡 layer split。</p>
-</header>
+  <h1><span class="zh">Flash-Next 调优时间线</span><span class="en">Flash-Next tuning timeline</span></h1>
+  <p class="lede"><span class="zh">同一个模型（IQ3_S）在这台机器上从 llama.cpp 换到 Strata，再一步步叠加改动。每一步写了当时为什么这么做和实测效果；虚线框是试过但没采用的方向。速度一律指双卡 layer split。</span><span class="en">One model (IQ3_S) on one machine, from llama.cpp to Strata, one change at a time. Each step says why it was tried and what it measured; dashed cards are directions tried and not adopted. Speeds are the two-card layer split unless noted.</span></p>
+  <div class="toggle" role="group" aria-label="Language / 语言"><button type="button" id="lang-zh" lang="zh-CN">中文</button><button type="button" id="lang-en" lang="en">English</button></div>
+  <nav aria-label="Sections">
+    <a href="#now"><span class="zh">现在</span><span class="en">Now</span></a>
+    <a href="#speed-sec"><span class="zh">速度一步步</span><span class="en">Speed, step by step</span></a>
+    <a href="#modes-sec"><span class="zh">单卡、helper、分层</span><span class="en">One card, helper, split</span></a>
+    <a href="#win1x-sec"><span class="zh">Windows 单卡</span><span class="en">One card on Windows</span></a>
+    <a href="#steps"><span class="zh">每一步</span><span class="en">Every step</span></a>
+    <a href="#closed"><span class="zh">已经到底的方向</span><span class="en">Closed directions</span></a>
+    <a href="https://github.com/Vop3p/dual-6900xt-flash-next-tuning">GitHub ↗</a>
+  </nav>
+</aside>
 
-<section class="now-sec">
-  <h2 class="now-h">现在 · 2× RX 6900 XT · Qwen3.8-Flash-Next IQ3_S</h2>
-  <p class="now-sub">Strata 0.2.3 + 5 个补丁 · 2026-10-23 实测（E533）</p>
+<main>
+<section id="now">
+  <h2><span class="zh">现在</span><span class="en">Now</span> · 2× RX 6900 XT · Qwen3.8-Flash-Next IQ3_S</h2>
+  <p class="now-sub"><span class="zh">Strata 0.2.3 + 5 个补丁 · 2026-10-23 实测（E533）</span><span class="en">Strata 0.2.3 + 5 patches · measured 2026-10-23 (E533)</span></p>
   <div class="now2">
-    <div class="grp"><span class="lbl">读 prompt tok/s</span>
+    <div class="grp"><span class="lbl"><span class="zh">读 prompt tok/s</span><span class="en">prompt tok/s</span></span>
       <div class="row"><div><b>1,008</b><small>4K</small></div><div><b>1,800</b><small>32K</small></div><div><b>2,171</b><small>128K</small></div></div></div>
-    <div class="grp"><span class="lbl">解码 tok/s</span>
-      <div class="row"><div><b>79</b><small>4K–128K 为 75–79；两路并发合计 60–64</small></div></div></div>
+    <div class="grp"><span class="lbl"><span class="zh">解码 tok/s</span><span class="en">decode tok/s</span></span>
+      <div class="row"><div><b>79</b><small><span class="zh">4K–128K 为 75–79；两路并发合计 60–64</span><span class="en">75–79 across 4K–128K; two streams together 60–64</span></small></div></div></div>
   </div>
-  <p class="foot now-src">benchmark.py 合成负载，不开图片编码器，两轮 · 构建、开关与补丁见 docs/linux-dual-6900xt</p>
-  <details class="now-more"><summary>生产配置细节</summary><p class="foot">生产（10-23 13:27 起）= Strata 上游 0.2.3 + #2985 流水 MTP（STRATA_PIPED_MTP=2，JacobSussan）+ 自有补丁：单路保留 pipeline-windows（STRATA_PW_WITH_BATCH=1，PR #3095）、HIP 上的 SIMT=2 打分（PR #3073）、--batch 下的 CPU 分担（PR #3382）、RDNA2 读 prompt 注意力（PR #3381）、rocBLAS 解的本机缓存 + STRATA_PREFILL_STREAM_MIN=2048 + 自改的 llama.cpp ggml；配置钉 --conversation-cache-mib 0（0.2.3 默认开的会话缓存让单会话读 prompt 慢 1.4–3%）。两路并发（parallel 2）；两卡降压 −81 mV @245 W（10-21 起）。四个数是 E533（同 E415 的合成负载 benchmark.py，生产配置去图片编码器，两轮）。</p></details>
+  <p class="foot now-src"><span class="zh">benchmark.py 合成负载，不开图片编码器，两轮 · 构建、开关与补丁见 docs/linux-dual-6900xt</span><span class="en">benchmark.py synthetic load, no vision encoder, two rounds · build, switches and patches: docs/linux-dual-6900xt</span></p>
+  <details class="now-more"><summary><span class="zh">生产配置细节</span><span class="en">Production configuration</span></summary><p class="foot"><span class="zh">生产（10-23 13:27 起）= Strata 上游 0.2.3 + #2985 流水 MTP（STRATA_PIPED_MTP=2，JacobSussan）+ 自有补丁：单路保留 pipeline-windows（STRATA_PW_WITH_BATCH=1，PR #3095）、HIP 上的 SIMT=2 打分（PR #3073）、--batch 下的 CPU 分担（PR #3382）、RDNA2 读 prompt 注意力（PR #3381）、rocBLAS 解的本机缓存 + STRATA_PREFILL_STREAM_MIN=2048 + 自改的 llama.cpp ggml；配置钉 --conversation-cache-mib 0（0.2.3 默认开的会话缓存让单会话读 prompt 慢 1.4–3%）。两路并发（parallel 2）；两卡降压 −81 mV @245 W（10-21 起）。</span><span class="en">Production (since 10-23 13:27) = Strata upstream 0.2.3 + #2985 pipelined MTP (STRATA_PIPED_MTP=2, JacobSussan) + own patches: the solo path keeps --pipeline-windows (STRATA_PW_WITH_BATCH=1, PR #3095), the SIMT=2 scorer on HIP (PR #3073), the CPU share beside --batch (PR #3382), the RDNA2 prompt attention (PR #3381), a per-device rocBLAS solution cache + STRATA_PREFILL_STREAM_MIN=2048 + a modified llama.cpp ggml; the config pins --conversation-cache-mib 0 (0.2.3's conversation cache, on by default, reads a single session's prompts 1.4–3% slower). Two parallel slots; both cards undervolted −81 mV at 245 W (since 10-21).</span></p></details>
 </section>
 
-<section>
-  <h2>速度怎么一步步上来的</h2>
+<section id="speed-sec">
+  <h2><span class="zh">速度怎么一步步上来的</span><span class="en">How the speed got here, step by step</span></h2>
   <div class="legend">
-    <span><i class="dot" style="background:var(--l-stable)"></i>读 prompt，4K（tok/s，左轴）</span>
-    <span><i class="dot" style="background:var(--l-prompt)"></i>读 prompt，32K–37K（tok/s，左轴）</span>
-    <span><i class="dot" style="background:var(--l-engine)"></i>读 prompt，128K（tok/s，左轴）</span>
-    <span><i class="dot" style="background:var(--l-decode)"></i>解码（tok/s，右轴）</span>
+    <span><i class="dot" style="background:var(--l-stable)"></i><span class="zh">读 prompt，4K</span><span class="en">prompt, 4K</span></span>
+    <span><i class="dot" style="background:var(--l-prompt)"></i><span class="zh">读 prompt，32K–37K</span><span class="en">prompt, 32K–37K</span></span>
+    <span><i class="dot" style="background:var(--l-engine)"></i><span class="zh">读 prompt，128K</span><span class="en">prompt, 128K</span></span>
+    <span><i class="dot" style="background:var(--l-decode)"></i><span class="zh">解码（下图）</span><span class="en">decode (lower panel)</span></span>
   </div>
-  <div class="panel"><div class="chart" id="speed"></div>
-  <p class="foot">各点来自不同实验，条件不完全相同：4K 线的前两点是 5K prompt（E215），238abe8 / 341922e 的 4K 来自两份社区报告的 split 臂；spec3/0.7+win2 那点的 prompt 三档取 E383/E387 的生产臂（解码配置不改 prompt，E388 ±0.7%）；llama.cpp 和 132a522 是 37K（E215）；0.1.39 和 238abe8 来自 10-05 社区报告，当时自适应关着；61c59fa 只测了 128K（E300）；341922e 来自 E342；10-07 起的点来自 E362 / E380 / E382 / E383 的 P 臂（生产配置、图片编码器在 HIP0）；0.1.42+MTP batch 那点是 E415（社区报告 #1927 的 iq3s-split-prs 臂，无图片编码器）；0.1.43.1+PRs 那点是社区报告 #2237 的 prs 臂（不是生产二进制）；最后一点是 E504：10-20 的生产 strata-145-pa-a6572b34，同 E415 的负载与配置（无图片编码器，三次中位）。空心点表示那一步没测这个指标。</p></div>
+  <div class="panel"><div class="chart" id="speed"></div><p class="swipe"><span class="zh">← 图可以左右滑动 →</span><span class="en">← the chart scrolls sideways →</span></p>
+  <p class="foot"><span class="zh">把鼠标放在某一步上看那一步的全部数字。各点来自不同实验，条件不完全相同：4K 线的前两点是 5K prompt（E215），238abe8 / 341922e 的 4K 来自两份社区报告的 split 臂；spec3/0.7+win2 那点的 prompt 三档取 E383/E387 的生产臂（解码配置不改 prompt，E388 ±0.7%）；llama.cpp 和 132a522 是 37K（E215）；0.1.39 和 238abe8 来自 10-05 社区报告，当时自适应关着；61c59fa 只测了 128K（E300）；341922e 来自 E342；10-07 起的点来自 E362 / E380 / E382 / E383 的 P 臂（生产配置、图片编码器在 HIP0）；0.1.42+MTP batch 那点是 E415（社区报告 #1927 的 iq3s-split-prs 臂，无图片编码器）；0.1.43.1+PRs 那点是社区报告 #2237 的 prs 臂（不是生产二进制）；0.1.45+补丁 是 E504，0.2.3+补丁 是 E533（同 E415 的负载与配置，无图片编码器）。虚线跨过没测这个指标的步骤。</span><span class="en">Hover a step for all its numbers. Points come from different experiments under slightly different conditions: the first two 4K points are 5K prompts (E215); the 4K of 238abe8 / 341922e comes from the split arms of two community reports; the spec3/0.7+win2 prompt numbers are the production arms of E383/E387 (the decode config does not change prompts, E388 ±0.7%); llama.cpp and 132a522 are 37K (E215); 0.1.39 and 238abe8 come from the 10-05 community report, adaptive swaps off at the time; 61c59fa measured 128K only (E300); 341922e is E342; from 10-07 the points are the P arms of E362 / E380 / E382 / E383 (production config, picture encoder on HIP0); 0.1.42+MTP batch is E415 (the iq3s-split-prs arm of community report #1927, no encoder); 0.1.43.1+PRs is the prs arm of community report #2237 (not the production binary); 0.1.45+patches is E504 and 0.2.3+patches E533 (the E415 load and config, no encoder). A dashed segment bridges steps where that metric was not measured.</span></p></div>
 </section>
 
-<section>
-  <h2>一张卡、helper、双卡分层（0.1.41，32K）</h2>
+<section id="modes-sec">
+  <h2><span class="zh">一张卡、helper、双卡分层（0.1.41，32K）</span><span class="en">One card, expert helper, layer split (0.1.41, 32K)</span></h2>
   <div class="legend">
     <span><i class="dot" style="background:var(--l-drop)"></i>stock</span>
-    <span><i class="dot" style="background:var(--l-prompt)"></i>+ 两个开关（F16 prompt、SH_STREAM）</span>
-    <span><i class="dot" style="background:var(--l-engine)"></i>+ 三个 PR + rocBLAS 缓存 + MMQ 补丁</span>
-    <span><i class="dot" style="background:var(--l-decode)"></i>+ E387 解码配置（仅分层）</span>
+    <span><i class="dot" style="background:var(--l-prompt)"></i><span class="zh">+ 两个开关（F16 prompt、SH_STREAM）</span><span class="en">+ two switches (F16 prompt, SH_STREAM)</span></span>
+    <span><i class="dot" style="background:var(--l-engine)"></i><span class="zh">+ 三个 PR + rocBLAS 缓存 + MMQ 补丁</span><span class="en">+ three PRs + rocBLAS cache + MMQ patches</span></span>
+    <span><i class="dot" style="background:var(--l-decode)"></i><span class="zh">+ E387 解码配置（仅分层）</span><span class="en">+ the E387 decode config (split only)</span></span>
   </div>
-  <div class="panel"><div class="chart" id="modes"></div></div>
-  <p class="foot">E388 / E388a，同一晚同一脚本，无图片编码器，每格 2 次取中位。单卡 16 GB 只装 ~4,500 个专家槽（命中 83%），解码压在 48–52；helper 让第二张卡只放专家，解码 66–75，prompt 仍是单卡速度；分层两项都提。helper 臂带 STRATA_HIP_ADAPT_KERNEL_COPY=1。</p>
+  <div class="panel"><div class="chart" id="modes"></div>
+  <p class="foot"><span class="zh">E388 / E388a，同一晚同一脚本，无图片编码器，每格 2 次取中位。单卡 16 GB 只装 ~4,500 个专家槽（命中 83%），解码压在 48–52；helper 让第二张卡只放专家，解码 66–75，prompt 仍是单卡速度；分层两项都提。helper 臂带 STRATA_HIP_ADAPT_KERNEL_COPY=1。</span><span class="en">E388 / E388a, one night, one script, no picture encoder, median of 2 per cell. One 16 GB card holds only ~4,500 expert slots (83% hits), so decode stays at 48–52; the helper mode gives the second card experts only: decode 66–75, prompt still at one card's speed; the split lifts both. The helper arms run with STRATA_HIP_ADAPT_KERNEL_COPY=1.</span></p></div>
 </section>
 
-<section>
-  <h2>Windows 单卡，一步步（IanLAB：RX 6900 XT 16 GB，i9-10900K，Windows 11）</h2>
+<section id="win1x-sec">
+  <h2><span class="zh">Windows 单卡，一步步（IanLAB：RX 6900 XT 16 GB，i9-10900K，Windows 11）</span><span class="en">One card on Windows, step by step (RX 6900 XT 16 GB, i9-10900K, Windows 11)</span></h2>
   <div class="legend">
-    <span><i class="dot" style="background:var(--l-stable)"></i>读 prompt，4K（tok/s，上图）</span>
-    <span><i class="dot" style="background:var(--l-prompt)"></i>读 prompt，16K（tok/s，上图）</span>
-    <span><i class="dot" style="background:var(--l-decode)"></i>解码，4K（tok/s，下图）</span>
+    <span><i class="dot" style="background:var(--l-stable)"></i><span class="zh">读 prompt，4K（上图）</span><span class="en">prompt, 4K (upper panel)</span></span>
+    <span><i class="dot" style="background:var(--l-prompt)"></i><span class="zh">读 prompt，16K（上图）</span><span class="en">prompt, 16K (upper panel)</span></span>
+    <span><i class="dot" style="background:var(--l-decode)"></i><span class="zh">解码，4K（下图）</span><span class="en">decode, 4K (lower panel)</span></span>
   </div>
-  <div class="panel"><div class="chart" id="win1x"></div>
-  <p class="foot">Strata 标准基准（strata bench run，三次中位，12/12），每一步一次完整运行，原始数据在社区报告 PR #4012。前六步都是官方 rdna2 包 0.1.48 原样，只改设置；最后一点（虚线）是 main + 拷贝事件补丁 #4005 在本机自编，同样 8192 chunk（E559，10-24 21:06，12/12，#4012 里的 …-9b72e2b1）：4K 586 → 809、16K 1,076 → 1,125、解码 42 → 45.5。同一二进制用 auto chunk（6144）时 16K 只有 979，那次在 #4012 里。保留 700 MiB 那次换页、12 题 0/12，不在曲线上。</p></div>
+  <div class="panel"><div class="chart" id="win1x"></div><p class="swipe"><span class="zh">← 图可以左右滑动 →</span><span class="en">← the chart scrolls sideways →</span></p>
+  <p class="foot"><span class="zh">Strata 标准基准（strata bench run，三次中位，12/12），每一步一次完整运行，原始数据在社区报告 PR #4012。前六步都是官方 rdna2 包 0.1.48 原样，只改设置；最后一点（虚线）是 main + 拷贝事件补丁 #4005 在本机自编，同样 8192 chunk（E559，12/12，#4012 里的 …-9b72e2b1）：4K 586 → 809、16K 1,076 → 1,125、解码 42 → 45.5。同一二进制用 auto chunk（6144）时 16K 只有 979。保留 700 MiB 那次换页、12 题 0/12，不在曲线上。</span><span class="en">Strata's standard benchmark (strata bench run, medians of three, 12/12), one complete run per step; the runs are in community report PR #4012. The first six steps are the official rdna2 package 0.1.48 unchanged, settings only; the dashed last step is main + the copy-event patch #4005 built on the PC, at the same 8,192 chunk (E559, 12/12, …-9b72e2b1 in #4012): 4K 586 → 809, 16K 1,076 → 1,125, decode 42 → 45.5. The same build at the auto chunk (6,144) read 16K at only 979. The 700 MiB reserve run paged (0/12) and is not on the curve.</span></p></div>
 </section>
 
-<section>
-  <h2>每一步</h2>
-  <div class="filters" id="filters" role="group" aria-label="按思路筛选"></div>
+<section id="steps">
+  <h2><span class="zh">每一步</span><span class="en">Every step</span></h2>
+  <div class="filters" id="filters" role="group" aria-label="Filter by line of attack / 按思路筛选"></div>
   <div class="tl" id="tl"></div>
 </section>
 
-<section>
-  <h2>已经到地板的（10-08 后别再提）</h2>
-  <ul class="closed">
+<section id="closed">
+  <h2><span class="zh">已经到底的方向（别再试）</span><span class="en">Closed directions (do not retry)</span></h2>
+  <ul class="closed zh">
     <li><b>解码的配置级旋钮单独调都到头了：</b><code>--kv-resident</code> 缩小（E382，专家槽只 +0.7%）、单开 <code>--pipeline-windows 2</code>（E384，+1–6%）、<code>--spec</code> × <code>--spec-min-p</code> 16 点网格（E385，pipeline-windows 1 下 4/0.5 是峰值）。<b>但组合有效</b>：spec 3 / min-p 0.7 + pipeline-windows 2 解码 +10–16%（E387，三轮确认，10-09 上生产）。</li>
     <li><b>并发批槽（10-08 的结论，10-15 推翻）：</b>当时常驻专家 41% 低于上游门槛、槽里不带 MTP；加上槽位草稿、单路保留流水窗口和后来的 #2985 后，两路并发已是生产（parallel 2）。</li>
     <li><b>IQ3_S 的 MMQ 分块 / stream-K</b>（E279/E280）、<code>--prefill</code> chunk 8192 即甜点（E296）、张量并行（E234，+6%）。</li>
     <li><b>上游自己测过对小卡无益：</b>GDN 分块（需 128 SM）、Foresight 交换槽（解码变慢）、STAGE_PIN（IQ3_S 损坏，改回 opt-in）。</li>
-    <li><b>0.1.42 的 opt-in（E413）和把 llama.cpp MMQ 补丁带进 Strata（E414）：</b>只有 <code>STRATA_SPLIT_MTP_BATCH=1</code> 过线（已上生产）；TAIL_SKIP / ROUTE_RESIDENT / aux-cpus 在噪声内或更慢，RESIDENT_SORT / PF_FUSED 本机不触发；ggml 补丁在 Strata 的专家 GEMM 上 ±1%。</li>
+    <li><b>0.1.42 的 opt-in（E413）和把 llama.cpp MMQ 补丁带进 Strata（E414）：</b>只有 <code>STRATA_SPLIT_MTP_BATCH=1</code> 过线；TAIL_SKIP / ROUTE_RESIDENT / aux-cpus 在噪声内或更慢，RESIDENT_SORT / PF_FUSED 本机不触发；ggml 补丁在 Strata 的专家 GEMM 上 ±1%。</li>
     <li><b>prompt 专家段（E450–E452）：</b>llama.cpp 的 MMQ 在真实形状上 28–34 TOPS 封顶；换 tile 宽度不省时；原地读不搬运只 +0.5%。<b>上游 0.1.43.1</b>（E432）对本机无收益。</li>
-    <li><b>还有空间的（10-20）：</b>PCIe 拓扑不换——"x16+x4 大 prompt 约 1.5×"在 10-15 推翻：Strata 上长 prompt 等 PCIe 只占 0.2–0.7%，x8≈x16；<2K 的短 prompt 才有 43–54% 在等（E482，已由 STREAM_MIN 与 CPU 分担缓解）。解码：专家缓存命中 85% 已高于全知静态集，预测换入没有空间，杠杆是每窗换入量（E499，未测）。</li>
+    <li><b>还有空间的（10-20）：</b>PCIe 拓扑不换——"x16+x4 大 prompt 约 1.5×"在 10-15 推翻：Strata 上长 prompt 等 PCIe 只占 0.2–0.7%，x8≈x16；&lt;2K 的短 prompt 才有 43–54% 在等（E482，已由 STREAM_MIN 与 CPU 分担缓解）。解码：专家缓存命中 85% 已高于全知静态集，预测换入没有空间，杠杆是每窗换入量（E499，未测）。</li>
+  </ul>
+  <ul class="closed en">
+    <li><b>Decode configuration knobs, each alone, are at their limit:</b> shrinking <code>--kv-resident</code> (E382, expert slots only +0.7%), <code>--pipeline-windows 2</code> alone (E384, +1–6%), a 16-point <code>--spec</code> × <code>--spec-min-p</code> grid (E385, 4/0.5 is the peak at pipeline-windows 1). <b>The combination works</b>: spec 3 / min-p 0.7 + pipeline-windows 2 decodes +10–16% (E387, three confirmation rounds, production since 10-09).</li>
+    <li><b>Concurrent batch slots (the 10-08 verdict, overturned 10-15):</b> resident experts were 41%, below upstream's gate, and slots carried no MTP; with slot drafts, the solo path keeping its pipeline windows and later #2985, two parallel slots are production (parallel 2).</li>
+    <li><b>MMQ tiling / stream-K for IQ3_S</b> (E279/E280), <code>--prefill</code> chunk 8192 is the sweet spot (E296), tensor parallel (E234, +6%).</li>
+    <li><b>Measured by upstream as no help on small cards:</b> chunked GDN (needs 128 SMs), Foresight swap slots (slower decode), STAGE_PIN (broke IQ3_S, back to opt-in).</li>
+    <li><b>The 0.1.42 opt-ins (E413) and the llama.cpp MMQ patches inside Strata (E414):</b> only <code>STRATA_SPLIT_MTP_BATCH=1</code> passed; TAIL_SKIP / ROUTE_RESIDENT / aux-cpus within noise or slower, RESIDENT_SORT / PF_FUSED never trigger here; the ggml patches ±1% on Strata's expert GEMMs.</li>
+    <li><b>Prompt experts (E450–E452):</b> llama.cpp's MMQ tops out at 28–34 TOPS on the real shapes; another tile width saves nothing; reading in place instead of gathering only +0.5%. <b>Upstream 0.1.43.1</b> (E432) brought nothing here.</li>
+    <li><b>Where room is left (10-20):</b> keep the PCIe topology — "x16+x4 reads big prompts ~1.5× faster" was overturned on 10-15: on Strata a long prompt waits on PCIe only 0.2–0.7% of the time, x8 ≈ x16; prompts under 2K wait 43–54% (E482, eased by STREAM_MIN and the CPU share). Decode: the expert cache already hits 85%, above an all-knowing static set; prediction has no room, the lever is swaps per window (E499, untested).</li>
   </ul>
 </section>
 
-<p class="foot">数据：实验编号（E…）对应作者的实验日志（见本仓库 README）；Strata 上游 bench/results 里的社区报告（PR #927 / #1270 / #1657 / #1927 / #2237 / #3426），引擎 PR #3381 / #3382 / #3073 / #3095（0.2.0-beta）。Developed with an AI coding assistant; every number above was measured on 2x RX 6900 XT (gfx1030, PCIe 4.0 x8 each) / Ryzen 5 5600X, ROCm 10.0.</p>
+<p class="foot"><span class="zh">数据：实验编号（E…）对应作者的实验日志（未公开）；Strata 上游 bench/results 里的社区报告（PR #927 / #1270 / #1657 / #1927 / #2237 / #3426 / #3790 / #4012），引擎 PR #3381 / #3382 / #3073 / #3095 / #4005。</span><span class="en">Data: experiment IDs (E…) refer to the author's lab notebook (not public); community reports in Strata's bench/results (PR #927 / #1270 / #1657 / #1927 / #2237 / #3426 / #3790 / #4012), engine PRs #3381 / #3382 / #3073 / #3095 / #4005.</span> Developed with an AI coding assistant; every number above was measured on 2x RX 6900 XT (gfx1030, PCIe 4.0 x8 each) / Ryzen 5 5600X, ROCm 10.0, and one RX 6900 XT / i9-10900K under Windows 11.</p>
+</main>
 </div>
 
 <script>
 const NS="http://www.w3.org/2000/svg";
 function el(t,a,txt){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);if(txt!=null)e.textContent=txt;return e;}
+const fmt=v=>v>=1000?v.toLocaleString('en-US'):String(v);
+let LANG='zh';
+const L2=p=>Array.isArray(p)?p[LANG==='en'?1:0]:p;   // [zh, en] or a plain string
 
-// milestones on the chart (production states)
+// production states on the speed chart; k = [zh, en] label (two lines), p4/p32/p128 prompt tok/s, d decode tok/s
 const M=[
   {k:'llama.cpp\n10-02',p4:274,p32:274,p128:null,d:23.7},
   {k:'Strata 0.1.38\n10-04',p4:430,p32:722,p128:null,d:54.8},
@@ -178,167 +215,204 @@ const M=[
   {k:'spec3/0.7+win2\n10-09',p4:961,p32:1710,p128:1950,d:82.2},
   {k:'0.1.42+MTP batch\n10-10',p4:985,p32:1792,p128:2046,d:81.9},
   {k:'0.1.43.1+PRs\n10-13',p4:975,p32:1782,p128:2033,d:81.6},
-  {k:'0.1.45+补丁\n10-20',p4:1020,p32:1790,p128:2158,d:79.4},
-  {k:'0.2.3+补丁\n10-23',p4:1008,p32:1800,p128:2171,d:79.4},
+  {k:['0.1.45+补丁\n10-20','0.1.45+patches\n10-20'],p4:1020,p32:1790,p128:2158,d:79.4},
+  {k:['0.2.3+补丁\n10-23','0.2.3+patches\n10-23'],p4:1008,p32:1800,p128:2171,d:79.4},
 ];
-(function(){
-  const W=860,H=372,L=56,R=110,T=16,B=84;
-  const svg=el('svg',{viewBox:`0 0 ${W} ${H}`});
-  const xs=i=>L+(W-L-R)*i/(M.length-1);
-  const yl=v=>T+(H-T-B)*(1-v/2400), yr=v=>T+(H-T-B)*(1-v/130);
-  [0,500,1000,1500,2000].forEach(v=>{svg.append(el('line',{x1:L,x2:W-R,y1:yl(v),y2:yl(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-8,y:yl(v)+4,'text-anchor':'end'},v.toLocaleString('en-US')));});
-  [0,30,60,90,120].forEach(v=>svg.append(el('text',{x:W-6,y:yr(v)+4,'text-anchor':'end'},String(v))));
-  M.forEach((m,i)=>{m.k.split('\n').forEach((s,j)=>svg.append(el('text',{x:xs(i),y:H-B+18+j*14+(i%2)*32,'text-anchor':'middle'},s)));});
-  const series=[['p4','var(--l-stable)',yl],['p32','var(--l-prompt)',yl],['p128','var(--l-engine)',yl],['d','var(--l-decode)',yr]];
-  series.forEach(([key,col,y])=>{
-    let last=null;
+const SPEED_SER=[['p4','var(--l-stable)',['4K','4K']],['p32','var(--l-prompt)',['32K–37K','32K–37K']],['p128','var(--l-engine)',['128K','128K']],['d','var(--l-decode)',['解码','decode']]];
+
+function tooltip(box){const t=document.createElement('div');t.className='tip';box.append(t);return t;}
+function drawSpeed(){
+  const box=document.getElementById('speed');box.innerHTML='';
+  const W=960,L=52,R=70,PT=22,PB=236,DT=270,DB=380,H=452;
+  const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,role:'img','aria-label':LANG==='en'?'Prompt and decode tok/s at each production state':'各生产状态的读 prompt 与解码速度'});
+  const xs=i=>L+18+(W-L-R-36)*i/(M.length-1);
+  const yp=v=>PT+(PB-PT)*(1-v/2400), yd=v=>DT+(DB-DT)*(1-(v-20)/70);
+  [0,600,1200,1800,2400].forEach(v=>{svg.append(el('line',{x1:L,x2:W-R,y1:yp(v),y2:yp(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-8,y:yp(v)+4,'text-anchor':'end'},fmt(v)));});
+  [20,40,60,80].forEach(v=>{svg.append(el('line',{x1:L,x2:W-R,y1:yd(v),y2:yd(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-8,y:yd(v)+4,'text-anchor':'end'},String(v)));});
+  svg.append(el('text',{x:L,y:PT-8,style:'font-size:11.5px'},LANG==='en'?'prompt tok/s':'读 prompt tok/s'));
+  svg.append(el('text',{x:L,y:DT-10,style:'font-size:11.5px'},LANG==='en'?'decode tok/s':'解码 tok/s'));
+  M.forEach((m,i)=>L2(m.k).split('\n').forEach((s,j)=>svg.append(el('text',{x:xs(i),y:DB+20+j*13+(i%2)*30,'text-anchor':'middle',style:'font-size:10px'},s))));
+  SPEED_SER.forEach(([key,col,name])=>{
+    const y=key==='d'?yd:yp; let last=null, end=null;
     M.forEach((m,i)=>{const v=m[key]; if(v==null) return;
-      if(last){const gap=i-last.i>1; svg.append(el('line',{x1:xs(last.i),y1:y(last.v),x2:xs(i),y2:y(v),stroke:col,'stroke-width':2,'stroke-dasharray':gap?'4 4':'none'}));}
-      last={i,v};});
-    M.forEach((m,i)=>{const v=m[key]; if(v==null) return;
-      svg.append(el('circle',{cx:xs(i),cy:y(v),r:4.5,fill:col,stroke:'var(--panel)','stroke-width':1.5}));
-      svg.append(el('text',{x:xs(i)+7,y:y(v)-7,style:`fill:${col}`},v>=1000?v.toLocaleString('en-US'):String(v)));});
+      if(last){const at={x1:xs(last.i),y1:y(last.v),x2:xs(i),y2:y(v),stroke:col,'stroke-width':2}; if(i-last.i>1) at['stroke-dasharray']='4 4'; svg.append(el('line',at));}
+      last={i,v}; end={i,v};});
+    M.forEach((m,i)=>{const v=m[key]; if(v==null) return; svg.append(el('circle',{cx:xs(i),cy:y(v),r:3.6,fill:col,stroke:'var(--panel)','stroke-width':1.5}));});
+    svg.append(el('text',{x:xs(end.i)+8,y:y(end.v)+4,style:`fill:${col};font-size:11.5px;font-weight:500`},fmt(end.v)));
   });
-  svg.append(el('text',{x:L,y:10},'tok/s'));
-  svg.append(el('text',{x:W-6,y:10,'text-anchor':'end'},'解码'));
-  document.getElementById('speed').append(svg);
-})();
+  const cross=el('line',{x1:0,x2:0,y1:PT,y2:DB,stroke:'var(--muted)','stroke-dasharray':'2 3',visibility:'hidden'});svg.append(cross);
+  box.append(svg);
+  const tip=tooltip(box);
+  M.forEach((m,i)=>{const w=(W-L-R-36)/(M.length-1);
+    const hit=el('rect',{x:xs(i)-w/2,y:PT,width:w,height:DB-PT,fill:'transparent'});
+    const show=ev=>{cross.setAttribute('x1',xs(i));cross.setAttribute('x2',xs(i));cross.setAttribute('visibility','visible');
+      tip.innerHTML=`<b>${L2(m.k).replace('\n',' · ')}</b>`+SPEED_SER.map(([key,col,name])=>`<span><i class="dot" style="background:${col}"></i>${L2(name)}: ${m[key]==null?(LANG==='en'?'not measured':'没测'):fmt(m[key])}</span>`).join('');
+      tip.style.display='block';const r=box.getBoundingClientRect(),sr=svg.getBoundingClientRect();const px=(xs(i)/W)*sr.width+(sr.left-r.left)+box.scrollLeft;
+      tip.style.left=Math.min(px+12,box.scrollWidth-tip.offsetWidth-4)+'px';tip.style.top='8px';};
+    hit.addEventListener('mouseenter',show);hit.addEventListener('focus',show);
+    hit.addEventListener('mouseleave',()=>{tip.style.display='none';cross.setAttribute('visibility','hidden');});
+    svg.append(hit);});
+}
 
-
-// one card / helper / split at 32K (E388, E388a): prompt tok/s and decode tok/s, grouped bars
-(function(){
-  const MODES=['单卡','helper','双卡分层'];
-  const SER=[['stock','var(--l-drop)',[502,503,767],[48.0,66.5,65.0]],['两开关','var(--l-prompt)',[1102,1103,1619],[51.6,74.9,74.6]],['PRs','var(--l-engine)',[1174,1173,1714],[50.9,75.2,68.8]],['E387','var(--l-decode)',[null,null,1707],[null,null,82.3]]];
-  const W=860,H=300,T=24,B=36,GAP=40,PW=(W-GAP)/2;
+// one card / helper / split at 32K (E388, E388a): grouped bars, prompt and decode
+function drawModes(){
+  const box=document.getElementById('modes');box.innerHTML='';
+  const MODES=[['单卡','one card'],['helper','helper'],['双卡分层','layer split']];
+  const SER=[['var(--l-drop)',[502,503,767],[48.0,66.5,65.0]],['var(--l-prompt)',[1102,1103,1619],[51.6,74.9,74.6]],['var(--l-engine)',[1174,1173,1714],[50.9,75.2,68.8]],['var(--l-decode)',[null,null,1707],[null,null,82.3]]];
+  const W=900,H=320,T=52,B=34,GAP=48,PW=(W-GAP)/2;
   const svg=el('svg',{viewBox:`0 0 ${W} ${H}`});
-  function panel(x0,title,idx,max,fmt){
-    const L=x0+48,R=x0+PW-8,y=v=>T+(H-T-B)*(1-v/max);
-    svg.append(el('text',{x:L,y:14},title));
-    const ticks=max>1000?[0,500,1000,1500,2000]:[0,20,40,60,80];
-    ticks.forEach(v=>{svg.append(el('line',{x1:L,x2:R,y1:y(v),y2:y(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-6,y:y(v)+4,'text-anchor':'end'},v.toLocaleString('en-US')));});
-    const gw=(R-L)/MODES.length, bw=gw/5.2;
+  function panel(x0,title,idx,max,ticks){
+    const L=x0+46,R=x0+PW-6,y=v=>T+(H-T-B)*(1-v/max);
+    svg.append(el('text',{x:L,y:14,style:'font-size:11.5px'},title));
+    ticks.forEach(v=>{svg.append(el('line',{x1:L,x2:R,y1:y(v),y2:y(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-6,y:y(v)+4,'text-anchor':'end'},fmt(v)));});
+    const gw=(R-L)/MODES.length, bw=Math.min(34,(gw-14)/4);
     MODES.forEach((m,i)=>{
-      svg.append(el('text',{x:L+gw*i+gw/2,y:H-B+18,'text-anchor':'middle'},m));
-      SER.forEach(([name,col,pv,dv],j)=>{const v=(idx===0?pv:dv)[i]; if(v==null) return;
-        const x=L+gw*i+gw*0.1+bw*j;
-        svg.append(el('rect',{x,y:y(v),width:bw-2,height:y(0)-y(v),fill:col,rx:2}));
-        svg.append(el('text',{x:x+(bw-2)/2,y:y(v)-4-(j%2)*11,'text-anchor':'middle',style:`fill:${col};font-size:10px`},fmt(v)));});
+      const n=SER.filter(s=>(idx===0?s[1]:s[2])[i]!=null).length, x0g=L+gw*i+(gw-n*bw)/2; let j=0;
+      svg.append(el('text',{x:L+gw*i+gw/2,y:H-B+18,'text-anchor':'middle',style:'font-size:11.5px'},L2(m)));
+      SER.forEach(([col,pv,dv])=>{const v=(idx===0?pv:dv)[i]; if(v==null) return;
+        const x=x0g+bw*j++;
+        svg.append(el('rect',{x:x+1,y:y(v),width:bw-2,height:y(0)-y(v),fill:col,rx:2}));
+        const lx=x+bw/2+3.5, ly=y(v)-5;   // values read upwards above each bar, so neighbours never collide
+        svg.append(el('text',{x:lx,y:ly,transform:`rotate(-90 ${lx} ${ly})`,style:`fill:${col};font-size:10.5px`},idx===0?fmt(v):v.toFixed(1)));});
     });
   }
-  panel(0,'读 prompt tok/s（32K）',0,2000,v=>v.toLocaleString('en-US'));
-  panel(PW+GAP,'解码 tok/s（32K）',1,90,v=>String(v));
-  document.getElementById('modes').append(svg);
-})();
+  panel(0,LANG==='en'?'prompt tok/s (32K)':'读 prompt tok/s（32K）',0,2000,[0,500,1000,1500,2000]);
+  panel(PW+GAP,LANG==='en'?'decode tok/s (32K)':'解码 tok/s（32K）',1,90,[0,30,60,90]);
+  box.append(svg);
+}
 
-// one RX 6900 XT under Windows 11, step by step (standard benchmark runs of PR #4012): prompt 4K / 16K, decode 4K
-(function(){
+// one RX 6900 XT under Windows 11, standard benchmark runs of PR #4012: prompt 4K / 16K (upper), decode 4K (lower)
+function drawWin(){
+  const box=document.getElementById('win1x');box.innerHTML='';
   const W1=[
-    {k:'开箱默认',p4:452,p16:479,d:28.3},
-    {k:'显示器→核显',p4:445,p16:470,d:29.1},
-    {k:'保留 1536\n+ KV 常驻',p4:467,p16:489,d:33.3},
-    {k:'+ 开关组\n（去 SH_STREAM）',p4:591,p16:798,d:35.4},
-    {k:'+ Windows\nrocBLAS 表',p4:595,p16:799,d:35.5},
-    {k:'pcie-frac 0.2\n+ prefill 8192',p4:586,p16:1076,d:42.3},
-    {k:'main + #4005\n+ prefill 8192',p4:809,p16:1125,d:45.5},
+    {k:['开箱默认','setup defaults'],p4:452,p16:479,d:28.3},
+    {k:['显示器→核显','monitor → iGPU'],p4:445,p16:470,d:29.1},
+    {k:['保留 1536\n+ KV 常驻','reserve 1536\n+ KV resident'],p4:467,p16:489,d:33.3},
+    {k:['+ 开关组\n（去 SH_STREAM）','+ switches\n(no SH_STREAM)'],p4:591,p16:798,d:35.4},
+    {k:['+ Windows\nrocBLAS 表','+ Windows\nrocBLAS table'],p4:595,p16:799,d:35.5},
+    {k:['pcie-frac 0.2\n+ prefill 8192','pcie-frac 0.2\n+ prefill 8192'],p4:586,p16:1076,d:42.3},
+    {k:['main + #4005\n+ prefill 8192','main + #4005\n+ prefill 8192'],p4:809,p16:1125,d:45.5},
   ];
-  const W=860,H=470,L=56,R=24,PT=20,PB=250,DT=286,DB=380;   // prompt panel PT..PB, decode panel DT..DB, step labels below
+  const W=900,H=470,L=56,R=24,PT=20,PB=250,DT=286,DB=380;
   const svg=el('svg',{viewBox:`0 0 ${W} ${H}`});
   const xs=i=>L+40+(W-L-R-80)*i/(W1.length-1);
   const yp=v=>PT+(PB-PT)*(1-v/1200), yd=v=>DT+(DB-DT)*(1-(v-20)/30);
-  [0,300,600,900,1200].forEach(v=>{svg.append(el('line',{x1:L,x2:W-R,y1:yp(v),y2:yp(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-6,y:yp(v)+4,'text-anchor':'end'},v.toLocaleString('en-US')));});
+  [0,300,600,900,1200].forEach(v=>{svg.append(el('line',{x1:L,x2:W-R,y1:yp(v),y2:yp(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-6,y:yp(v)+4,'text-anchor':'end'},fmt(v)));});
   [20,30,40,50].forEach(v=>{svg.append(el('line',{x1:L,x2:W-R,y1:yd(v),y2:yd(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-6,y:yd(v)+4,'text-anchor':'end'},String(v)));});
-  svg.append(el('text',{x:L,y:PT-6,style:'font-size:11.5px'},'读 prompt tok/s'));
-  svg.append(el('text',{x:L,y:DT-8,style:'font-size:11.5px'},'解码 tok/s'));
-  W1.forEach((m,i)=>m.k.split('\n').forEach((ln,j)=>svg.append(el('text',{x:xs(i),y:DB+24+j*14,'text-anchor':'middle',style:'font-size:11px'},ln))));
+  svg.append(el('text',{x:L,y:PT-6,style:'font-size:11.5px'},LANG==='en'?'prompt tok/s':'读 prompt tok/s'));
+  svg.append(el('text',{x:L,y:DT-8,style:'font-size:11.5px'},LANG==='en'?'decode tok/s':'解码 tok/s'));
+  W1.forEach((m,i)=>L2(m.k).split('\n').forEach((ln,j)=>svg.append(el('text',{x:xs(i),y:DB+24+j*14,'text-anchor':'middle',style:'font-size:11px'},ln))));
   [['p4','var(--l-stable)',yp,16],['p16','var(--l-prompt)',yp,-9],['d','var(--l-decode)',yd,-9]].forEach(([key,col,y,dy])=>{
     W1.forEach((m,i)=>{if(i>0){const at={x1:xs(i-1),y1:y(W1[i-1][key]),x2:xs(i),y2:y(m[key]),stroke:col,'stroke-width':2}; if(i===W1.length-1) at['stroke-dasharray']='5 4'; svg.append(el('line',at));}});
     W1.forEach((m,i)=>{svg.append(el('circle',{cx:xs(i),cy:y(m[key]),r:3.5,fill:col}));
-      svg.append(el('text',{x:xs(i),y:y(m[key])+dy,'text-anchor':'middle',style:`fill:${col};font-size:10.5px`},m[key].toLocaleString('en-US')));});
+      svg.append(el('text',{x:xs(i),y:y(m[key])+dy,'text-anchor':'middle',style:`fill:${col};font-size:10.5px`},fmt(m[key])));});
   });
-  document.getElementById('win1x').append(svg);
-})();
+  box.append(svg);
+}
 
-const LANES={engine:['引擎选择','var(--l-engine)'],prompt:['读 prompt','var(--l-prompt)'],decode:['解码','var(--l-decode)'],stable:['稳定性 #884','var(--l-stable)'],drop:['试过没采用','var(--l-drop)']};
-// [day, time, lane, title, why, [[text,dir]...]]
+const LANES={engine:[['引擎选择','engine'],'var(--l-engine)'],prompt:[['读 prompt','prompt'],'var(--l-prompt)'],decode:[['解码','decode'],'var(--l-decode)'],stable:[['稳定性 #884','stability #884'],'var(--l-stable)'],drop:[['试过没采用','tried, not adopted'],'var(--l-drop)']};
+// [day, time, lane, [title zh, en], [why zh, en], [[[effect zh, en], up|down|flat]...]]
 const S=[
- ['09-30','16:44','engine','llama.cpp 换 IQ3_S + 112 槽专家缓存','同样的显存装下更多专家，缓存命中更高',[['20K：pp 274、tg 22.7','up'],['上线时 UD 版 224 / 17.0','flat']]],
- ['10-02','02:06','decode','llama.cpp 官方 MTP 草稿头 + 137 槽','MTP 草稿 + 更多缓存槽',[['快 10–18%','up']]],
- ['10-04','01:05','engine','对比 Strata 与 llama.cpp（E215）','同一个 IQ3_S，看 Strata 的专家调度在双卡上能不能更快',[['37K prompt 274 → 722（2.6×）','up'],['解码 23.7 → 54.8（2.3×）','up']]],
- ['10-04','02:30','engine','生产切到 Strata（132a522）','E215 两项都 2 倍以上',[['开 strata-split / strata-helper 两个槽','flat']]],
- ['10-04','01:40','drop','副卡参与读 prompt（peer 模式）','想让第二张卡也帮着算专家',[['默认会卡死；绕过后比单卡还慢','down']]],
- ['10-04','17:00','engine','升到 0.1.39（6add1a7）','上游新版',[['32K 723、128K 821，解码 59–61','flat']]],
- ['10-04','19:40','decode','helper 槽 --pcie-frac 0（E241）','DECODE_TIMING 拆出来：PCIe 份额把主卡拖慢一倍',[['helper 解码 39–41 → 60–68','up']]],
- ['10-04','21:00','stable','关自适应（--adapt-every 100000）','先止住 #884 卡死',[['不再卡','up'],['解码代价 −3~11%','down']]],
- ['10-05','04:22','drop','专家改走解压 + 稠密 GEMM（MMQ 关）','想看 int8 MMQ 是不是瓶颈',[['−34~−40%，MMQ 保留','down']]],
- ['10-05','14:52','drop','spec 3 / min-p 0.7（别人的 +9.5%）','别的卡上更快',[['本机持平偏慢 2–3%','flat']]],
- ['10-05','15:32','prompt','238abe8：F16 prompt + attn 内核 + rocBLAS 表（#835 #849 #981）','gfx1030 没有矩阵核心，rocBLAS 默认选的 kernel 慢 7 倍',[['32K 723 → 1,616（2.2×）','up'],['128K 821 → 1,823','up'],['短 prompt GPU −10~14%','up']]],
- ['10-05','18:45','prompt','IO_THREADS=128 + PLE 表锁在内存','首块等 PLE 行 600 → 306 ms',[['8K prompt +3.6%','up']]],
- ['10-04','15:10','drop','张量并行（估算 +35~50%）','把投影切到两张卡',[['实测只能 +6~8%，不做','flat']]],
- ['10-05','20:25','prompt','61c59fa：QSA select 走 rocBLAS SGEMM（#1007）','select 是唯一随上下文增长的项',[['128K 1,818 → 1,940（+6.7%）','up'],['50K 以下无收益','flat']]],
- ['10-06','06:26','stable','找到 #884 的另一半：GFXOFF','关掉 GPU 省电后再测',[['卡死 7/8 → 0/30','up']]],
- ['10-06','07:04','stable','GFXOFF 租约 + 重开自适应（E334）','用关省电代替关自适应，拿回解码',[['自适应回来，解码恢复','up']]],
- ['10-06','13:52','engine','0.1.40.1 对比 0.1.39（E340）','同一下午，GFXOFF 真开',[['0.1.39 栈 7/8 卡；0.1.40.1 0/8','up']]],
- ['10-06','18:04','engine','生产换 341922e：0.1.40.1 + 我们的 PR + SH_STREAM + F16','新版不再卡、分叉在本机更快',[['32K 1,685、128K 2,003','up'],['解码 59 → 70–75','up']]],
- ['10-06','19:10','stable','kernel-copy 代替 GFXOFF 租约（E344）','128K split 在 GFXOFF 默认下仍停转',[['停转 3/3 → 0/3','up'],['速度不变，省待机功耗','flat']]],
- ['10-06','20:05','drop','上游 4 个提速 PR（#1120 #1125 #1181 #1240）','逐个 A/B，各 2 对冷启动',[['都没有可确认的收益','flat']]],
- ['10-06','20:20','decode','75d5a78：加 AVX2 量化（#1125）','结果逐字节相同，开着没代价',[['速度不变','flat']]],
- ['10-06','21:24','engine','只留 split：删 helper 和旧槽','helper 读 prompt 只有单卡速度',[['llama-swap 剩 5 个槽','flat']]],
- ['10-06','22:20','engine','split 两槽开图片（自编 HIP strata-vision）','用户要图片；官方 AMD 只给 CPU 编码器',[['主卡缓存 −11%，32K prompt −3.6%','down'],['640×480 图 3.2 s','flat']]],
- ['10-07','16:54','prompt','4592281：rocBLAS 解存本机缓存（E357）','select 的解每次启动现测，两卡/两次会挑不同解，文本偶尔变',[['速度持平，解不再随启动变','flat']]],
- ['10-07','21:00','prompt','#1151 改为 SIMT 打分核（上游 65ce329 移植，E358–E360）','FP32 分块核比 rocBLAS SGEMM 快，不要表、不要实测、逐字节一致',[['128K prompt +7.4%','up'],['32K +0.8%','flat']]],
- ['10-07','22:10','prompt','图片编码器挪到 HIP0（E362）','主卡被编码器占显存，另一张卡本来在等',[['主卡缓存 5,256 → 6,123 槽','up'],['32K prompt +2.8~3.8%','up']]],
- ['10-08','01:00','drop','strata-ud-q4 槽：UD-Q4_K_XL 在 HIP 分层跑通（E364–E366）','和 IQ3_S 比质量（GSQ 用 xhigh 推理校准）',[['解码 −38%、32K prompt −3%','down'],['只用于比质量','flat']]],
- ['10-08','19:25','prompt','q8k-4592281：ggml 换成 llama-q2k（E380）','Strata 的专家 prompt 矩阵乘就是 llama.cpp 的 MMQ；q8_0/iq3_s 的 dot 链头改 VOP3P 省掉清零 mov',[['iq3_s 内核 +2.6%','up'],['32K prompt +1.4~1.5%，12 条输出逐字相同','up']]],
- ['10-08','20:30','drop','--kv-resident 32K → 16K（E382）','想把 VRAM 让给专家缓存',[['专家槽只 +0.7%：Flash-Next 的 KV 常驻才一百多 MB','flat'],['32K 解码 −3%','down']]],
- ['10-08','21:25','engine','生产升 0.1.41（strata-141-d14ca361，E383）','跟上上游 151 个提交；7 个补丁 rebase 无冲突',[['12 条输出逐字相同、速度 ±0.5%、0 停转','flat'],['json 加 gpu_order=as_given 保住卡序','flat']]],
- ['10-08','21:27','drop','--pipeline-windows 2（E384）','第二卡验证本窗时第一卡提前算下一窗',[['解码 +1~6%','flat'],['输出跨启动不确定（2/7 同）、4K prompt −1~5%','down']]],
- ['10-08','21:50','drop','--spec × --spec-min-p 16 点网格（E385/E385b）','每窗 33 ms 固定，速度取决于每窗接受数',[['只有 5/0.6 在 32K +2.5%（单轮）','flat'],['其余全负，4/0.5 是峰值','down']]],
- ['10-08','23:42','decode','--spec 3 --spec-min-p 0.7 + --pipeline-windows 2（E387）','E384/E385 各自单变量都否定了，但短草稿几乎全接受（83% vs 68%）时，第二窗的推测才命中——两个旋钮有交互',[['解码 4K +10~16%、32K +8~11%，三轮确认','up'],['prompt 不变；输出跨启动不确定（基线是确定的）；128K 无编码器配置下 +11%（E388）；10-09 00:16 上生产','flat']]],
- ['10-08','22:50','drop','并发批槽（--batch N，0.1.41 的 batch-groups auto）','两卡流水能不能提总吞吐',[['常驻专家 41% < 门槛 50%；槽里不带 MTP','down'],['单人使用无意义，不测','flat']]],
- ['10-09','上午','drop','flag 清单 K1：35 个开关/档位逐个单变量（E395–E401）','把上游 Strix Halo / CUDA 上有效的内核族开关、借槽、缓存、放置、草稿开关在本机各测一遍',[['单独没有一个超过噪声；17 个明确变慢（SPLIT_OWN / no-prefill-borrow 32K −35%）','down'],['六个噪声内的叠加解码 +1%，生产里测不出，归档','flat']]],
- ['10-10','13:40','drop','0.1.42 其余 opt-in（E413）','TAIL_SKIP=7 / ROUTE_RESIDENT / aux-cpus / RESIDENT_SORT / PF_FUSED 逐个单变量',[['TAIL_SKIP +4/+1% 在 ±6% 噪声内且改答案；ROUTE_RESIDENT 命中 98.7% 却慢 1~3.5%','down'],['RESIDENT_SORT 要整层全常驻、PF_FUSED 只有 gfx11/12：本机空操作','flat']]],
- ['10-10','14:33','prompt','生产升 0.1.42 + STRATA_SPLIT_MTP_BATCH=1（strata-142-cd87f4d2，E413）','分层时草稿层的 prompt K/V 改走 prompt 路径的 MMQ，不再每 8 行一次小批',[['prompt +4.1 / +6.9 / +2.0%（4K/32K/128K，三轮同向），解码与接受率不变','up'],['0.1.42 本身与 0.1.41 固定协议下逐字相同、速度持平','flat']]],
- ['10-10','23:38','drop','llama.cpp RDNA2 MMQ 补丁放进 Strata（E414，对照 PR #1897）','27B 上值 +5~11% 的补丁能否帮 Strata 的 UD-Q4 专家 GEMM',[['prompt ±1%；Q8_K 激活版 8K 解码 −7%','down'],['专家 GEMM 只占 prompt 34%、行数形状不同；strata_mmq 本来就没编 Q8K 宏','flat']]],
- ['10-12','02:00','decode','strata-ud-q4 补上 E387 解码配置（E422/E423）','E387 上线时只改了 IQ3_S 两个槽；同一机制在 UD-Q4 上是否成立',[['解码 4K / 32K / 128K +13.5 / +9.6 / +5.2%','up'],['prompt −0.3%，草稿接受 66 → 79%','flat']]],
- ['10-11','01:57','engine','strata-ud-q4 槽升 0.1.42 + KQUANTS + SPLIT_MTP_BATCH（E415，社区报告 #1927）','IQ3_S 与 UD-Q4_K_XL × 单卡/分层 × 原版/PR 八臂',[['UD-Q4 分层 756 / 1,748 / 1,981，解码 45~51（旧槽 715 / 1,640，43~46）','up'],['原版 prompt 两格式相同（稠密 FP16 路径是上限）；UD-Q4 解码比 IQ3_S 慢 30~35%','flat']]],
- ['10-12','14:55','decode','验证器的 hc 读改成一个常驻内核（E424–E427，STRATA_HC_PERSIST=1）','每层开头的 hc 读是几个小内核，窗口只有 ≤8 token 时时间耗在发射和同步上；改成 80 块常驻 + 两道网格屏障',[['每个验证窗口 −2.5~2.8%','up'],['非逐位，但离 double 参照更近','flat']]],
- ['10-12','16:51','drop','上游 0.1.43.1 评估（E432/E433）','跟上上游；看 #2055 的 gfx103x 侧流在 Linux 上有没有用',[['解码持平、prompt −0.5%；侧流在本机中性','flat'],['不升级，补丁 rebase 后留作底座','down']]],
- ['10-12','22:02','decode','常驻 hc 读精简自适应版（strata-142-hcpa-2712fb13，E439）','能不能驻留只靠启动时实跑检查：占用率 API 在 Ubuntu 的 HIP 7.1 下过保守、ROCm 10 下过乐观',[['与上一版逐位相同，每窗再 −0.8~1.4%','up']]],
- ['10-13','11:30','engine','四个引擎 PR 按上游门槛重测（E448）','维护者要的是当前版本 + 10 对交错 A/B 中位数 + gfx103x ctest',[['#2226 每窗 −6.6 / −4.4%；#1167 prompt +13.9 / +12.1%；#1992 解码 +8.0 / +9.5%；全部 10/10','up'],['#1151 从 0.1.40 的 +7.4% 缩到 128K +3.2%','down']]],
- ['10-13','13:46','prompt','时间分解：原版对比调优后（E449，docs/linux-dual-6900xt 的「时间花在哪」）','同一版本 0.1.43.1 上把两边的 prompt 与解码按阶段拆开',[['prompt ×2.1~2.3（GDN 段 594 → 153 ms/千 token），解码 ×1.23~1.30','up'],['调优后专家段成了 prompt 最大的一块','flat']]],
- ['10-13','15:42','drop','prompt 专家段：MMQ 上限、tile 宽度、原地读（E450–E452）','专家段占调优后 prompt 的 ~37%，看还能不能挖',[['MMQ 在真实形状上 28–34 TOPS 封顶；换 tile 宽度不省时','flat'],['原地读、不再搬运（输出逐位相同）只 +0.5%，不采用','down']]],
- ['10-13','18:29','drop','0.1.44 的 STRATA_HC_Q8 在 gfx1030（E454）','hc 投影改读 Q8_0，RDNA4 上默认开、解码 +2.5~4%；它会让常驻 hc 读让位',[['每窗 4K +2.4%、32K +1.0%（更慢），prompt −0.7~1%','down'],['本机 hc 读受发射限制，不受带宽限制','flat']]],
- ['10-13','23:40','prompt','#2071 的 SIMT=2 打分在 HIP 上接通（E457）','上游的 =2 只在 CUDA 生效，HIP 上静默退回 warp 核',[['prompt +1%（0.1.44）；0.2.0 上 119K −6.5%（E503，10/10）','up'],['送 PR #3073','flat']]],
- ['10-15','19:30','decode','两路并发 A/B/C（E463–E470，strata-144-pmtp-a380c2c0）','parallel 2 下第二个请求要等 12 s；--batch 还关掉了单路的 pipeline-windows',[['第二请求首字 12 → 0.5 s，长读插短 37 → 8 s，两路 +6%','up'],['A = 单路保留 pipeline-windows（PR #3095）','flat']]],
- ['10-18','13:09','engine','生产升 0.1.45（strata-145-acx，E475）','原版 0.1.45 缺 A，单路解码 −11~16%；带上 A + C + SIMT2 后持平',[['与旧生产打平，补丁从 9 个减到 3 个','flat']]],
- ['10-18','21:10','decode','上游 #2985 流水 MTP 换掉我们的 C（E481）','JacobSussan 的延迟提交做法：接受后不回填重算',[['两路总吞吐 +13%，单路与交接不变，找针 14/14','up']]],
- ['10-19','02:20','prompt','STRATA_PREFILL_STREAM_MIN=2048（E482–E485）','<2K 的短 prompt 有 43–54% 时间在等 PCIe 搬专家',[['真实文本 1.1–1.5K −6~17%，≥2048 不变','up'],['合成提示词让 3072 看起来更好，真实文本否掉','flat']]],
- ['10-19','17:40','prompt','--batch 下也用 CPU 分担（E493/E494，PR #3382）','上游 batch>0 时直接关掉 CPU 分担',[['<2048 token 的读 −20~35%，续写 455 token 1.86 → 1.25 s','up'],['≥2048 与并发不变','flat']]],
- ['10-19','20:30','prompt','RDNA2 读 prompt 注意力（E495–E498e，PR #3381）','gfx103x 读 prompt 借用解码内核：64 单元切块 + 合并',[['注意力每块 500 → 355 ms，34K / 133K −3.5%','up'],['质量门（8 段对 FP64 注意力参照）不劣','flat']]],
- ['10-19','22:15','drop','SeqMoE 式专家预取的上界（E499）','26.6 万条真实 agent 路由回放',[['现缓存命中 85%，高于全知静态集；完美的 8 窗预测器也不更好','down'],['杠杆是每窗换入量，不是预测','flat']]],
- ['10-20','03:10','engine','两个补丁按上游新规在 0.2.0 上复测并发 PR（E501–E503）','setup.py 构建、逐字节默认路径、ctest、10 对交错、FP64 参照质量门、CUDA 13.2 编译',[['#3381 −3.49%（10/10）、#3382 短读 −28.8%（10/10）','up'],['#3073 / #3095 在 0.2.0 上 −6.5% / +12~16%','up']]],
- ['10-13','20:10','engine','生产升 0.1.44（strata-144-hcpa-efa52cd1，E454/E455）','补丁合入只有 setup.py 一处冲突；用生产配置原样对现生产 A/B',[['32K 每窗 −1.4%（3/3），其余噪声内，0 停转','up'],['UD-Q4 槽不升：K-quant prompt 要 STRATA_MMQ_KQ=1，加后解码 −1.2%','flat']]],
- ['10-20','16:40','engine','生产升 0.2.1.3（strata-0213-40d9a2dc，E516/E517）','上游 0.2.1.3 + #2985 移植 + 5 个自有补丁，生产配置原样 3 对 A/B',[['读 prompt −0.2~−0.8%、解码在噪声内，0 停转','flat'],['KL 0.034 / 0.029（旧 0.026）：逐段看是重分布不是变差','flat']]],
- ['10-21','10:17','stable','两卡降压 −81 mV @245 W（E522/E523）','解码不随频率变（E507–E512），降压换温度和功耗',[['37 轮 0 次翻转；card1 到 −88 就有翻转','flat']]],
- ['10-22','18:47','engine','生产升 0.2.2（strata-022-34cd8534，E527）','合并 v0.2.2，补丁、ggml、构建选项都不变',[['KL 0.028 / 0.030 对 0.031，持平；8 段里 7 段逐位相同','flat']]],
- ['10-23','13:27','engine','生产升 0.2.3（strata-023-b523b933，E533）','合并 v0.2.3；它把会话缓存改成默认按内存自动开',[['自动缓存让单会话读 prompt −3% / −1.4%，配置钉 --conversation-cache-mib 0','down'],['钉住后 1,008 / 1,800 / 2,171、解码 75 / 79 / 78，与 022 持平','flat']]],
+ ["09-30", "16:44", "engine", ["llama.cpp 换 IQ3_S + 112 槽专家缓存", "llama.cpp switched to IQ3_S + a 112-slot expert cache"], ["同样的显存装下更多专家，缓存命中更高", "more experts fit in the same VRAM, so the cache hits more often"], [[["20K：pp 274、tg 22.7", "20K: pp 274, tg 22.7"], "up"], [["上线时 UD 版 224 / 17.0", "the UD build at launch: 224 / 17.0"], "flat"]]],
+ ["10-02", "02:06", "decode", ["llama.cpp 官方 MTP 草稿头 + 137 槽", "llama.cpp's official MTP draft head + 137 slots"], ["MTP 草稿 + 更多缓存槽", "MTP drafting + more cache slots"], [[["快 10–18%", "10–18% faster"], "up"]]],
+ ["10-04", "01:05", "engine", ["对比 Strata 与 llama.cpp（E215）", "Strata against llama.cpp (E215)"], ["同一个 IQ3_S，看 Strata 的专家调度在双卡上能不能更快", "the same IQ3_S: can Strata's expert scheduling go faster on two cards?"], [[["37K prompt 274 → 722（2.6×）", "37K prompt 274 → 722 (2.6×)"], "up"], [["解码 23.7 → 54.8（2.3×）", "decode 23.7 → 54.8 (2.3×)"], "up"]]],
+ ["10-04", "02:30", "engine", ["生产切到 Strata（132a522）", "production moved to Strata (132a522)"], ["E215 两项都 2 倍以上", "E215: both more than 2×"], [[["开 strata-split / strata-helper 两个槽", "two slots: strata-split / strata-helper"], "flat"]]],
+ ["10-04", "01:40", "drop", ["副卡参与读 prompt（peer 模式）", "the second card helping to read the prompt (peer mode)"], ["想让第二张卡也帮着算专家", "let the second card compute experts too"], [[["默认会卡死；绕过后比单卡还慢", "hangs by default; worked around, slower than one card"], "down"]]],
+ ["10-04", "17:00", "engine", ["升到 0.1.39（6add1a7）", "upgrade to 0.1.39 (6add1a7)"], ["上游新版", "new upstream release"], [[["32K 723、128K 821，解码 59–61", "32K 723, 128K 821, decode 59–61"], "flat"]]],
+ ["10-04", "19:40", "decode", ["helper 槽 --pcie-frac 0（E241）", "helper slot --pcie-frac 0 (E241)"], ["DECODE_TIMING 拆出来：PCIe 份额把主卡拖慢一倍", "DECODE_TIMING: the PCIe share made the main card twice as slow"], [[["helper 解码 39–41 → 60–68", "helper decode 39–41 → 60–68"], "up"]]],
+ ["10-04", "21:00", "stable", ["关自适应（--adapt-every 100000）", "adaptive swaps off (--adapt-every 100000)"], ["先止住 #884 卡死", "stop the #884 hangs first"], [[["不再卡", "no more hangs"], "up"], [["解码代价 −3~11%", "decode cost −3~11%"], "down"]]],
+ ["10-05", "04:22", "drop", ["专家改走解压 + 稠密 GEMM（MMQ 关）", "experts via dequantize + dense GEMM (MMQ off)"], ["想看 int8 MMQ 是不是瓶颈", "is int8 MMQ the bottleneck?"], [[["−34~−40%，MMQ 保留", "−34~−40%, MMQ stays"], "down"]]],
+ ["10-05", "14:52", "drop", ["spec 3 / min-p 0.7（别人的 +9.5%）", "spec 3 / min-p 0.7 (+9.5% elsewhere)"], ["别的卡上更快", "faster on other cards"], [[["本机持平偏慢 2–3%", "flat to 2–3% slower here"], "flat"]]],
+ ["10-05", "15:32", "prompt", ["238abe8：F16 prompt + attn 内核 + rocBLAS 表（#835 #849 #981）", "238abe8: F16 prompt + attention kernel + rocBLAS table (#835 #849 #981)"], ["gfx1030 没有矩阵核心，rocBLAS 默认选的 kernel 慢 7 倍", "gfx1030 has no matrix cores; rocBLAS's default kernel was 7× slower"], [[["32K 723 → 1,616（2.2×）", "32K 723 → 1,616 (2.2×)"], "up"], [["128K 821 → 1,823", "128K 821 → 1,823"], "up"], [["短 prompt GPU −10~14%", "short prompts GPU −10~14%"], "up"]]],
+ ["10-05", "18:45", "prompt", ["IO_THREADS=128 + PLE 表锁在内存", "IO_THREADS=128 + PLE table locked in RAM"], ["首块等 PLE 行 600 → 306 ms", "the first chunk's wait for PLE rows 600 → 306 ms"], [[["8K prompt +3.6%", "8K prompt +3.6%"], "up"]]],
+ ["10-04", "15:10", "drop", ["张量并行（估算 +35~50%）", "tensor parallel (estimated +35~50%)"], ["把投影切到两张卡", "split the projections across the two cards"], [[["实测只能 +6~8%，不做", "measured only +6~8%, not done"], "flat"]]],
+ ["10-05", "20:25", "prompt", ["61c59fa：QSA select 走 rocBLAS SGEMM（#1007）", "61c59fa: QSA select through rocBLAS SGEMM (#1007)"], ["select 是唯一随上下文增长的项", "select is the only term that grows with the context"], [[["128K 1,818 → 1,940（+6.7%）", "128K 1,818 → 1,940 (+6.7%)"], "up"], [["50K 以下无收益", "no gain below 50K"], "flat"]]],
+ ["10-06", "06:26", "stable", ["找到 #884 的另一半：GFXOFF", "the other half of #884: GFXOFF"], ["关掉 GPU 省电后再测", "measure again with GPU power saving off"], [[["卡死 7/8 → 0/30", "hangs 7/8 → 0/30"], "up"]]],
+ ["10-06", "07:04", "stable", ["GFXOFF 租约 + 重开自适应（E334）", "GFXOFF lease + adaptive swaps back on (E334)"], ["用关省电代替关自适应，拿回解码", "turn power saving off instead of the adaptive cache, and get decode back"], [[["自适应回来，解码恢复", "adaptive back, decode restored"], "up"]]],
+ ["10-06", "13:52", "engine", ["0.1.40.1 对比 0.1.39（E340）", "0.1.40.1 against 0.1.39 (E340)"], ["同一下午，GFXOFF 真开", "the same afternoon, GFXOFF really on"], [[["0.1.39 栈 7/8 卡；0.1.40.1 0/8", "0.1.39 stack hangs 7/8; 0.1.40.1 0/8"], "up"]]],
+ ["10-06", "18:04", "engine", ["生产换 341922e：0.1.40.1 + 我们的 PR + SH_STREAM + F16", "production → 341922e: 0.1.40.1 + our PRs + SH_STREAM + F16"], ["新版不再卡、分叉在本机更快", "the new release no longer hangs; the fork is faster here"], [[["32K 1,685、128K 2,003", "32K 1,685, 128K 2,003"], "up"], [["解码 59 → 70–75", "decode 59 → 70–75"], "up"]]],
+ ["10-06", "19:10", "stable", ["kernel-copy 代替 GFXOFF 租约（E344）", "kernel copy instead of the GFXOFF lease (E344)"], ["128K split 在 GFXOFF 默认下仍停转", "128K split still stalls with GFXOFF at its default"], [[["停转 3/3 → 0/3", "stalls 3/3 → 0/3"], "up"], [["速度不变，省待机功耗", "same speed, lower idle power"], "flat"]]],
+ ["10-06", "20:05", "drop", ["上游 4 个提速 PR（#1120 #1125 #1181 #1240）", "four upstream speed PRs (#1120 #1125 #1181 #1240)"], ["逐个 A/B，各 2 对冷启动", "A/B one by one, 2 cold-start pairs each"], [[["都没有可确认的收益", "no confirmable gain from any"], "flat"]]],
+ ["10-06", "20:20", "decode", ["75d5a78：加 AVX2 量化（#1125）", "75d5a78: AVX2 quantization (#1125)"], ["结果逐字节相同，开着没代价", "byte-identical results, no cost to keep it"], [[["速度不变", "same speed"], "flat"]]],
+ ["10-06", "21:24", "engine", ["只留 split：删 helper 和旧槽", "split only: helper and old slots removed"], ["helper 读 prompt 只有单卡速度", "the helper reads prompts at one card's speed"], [[["llama-swap 剩 5 个槽", "5 slots left in llama-swap"], "flat"]]],
+ ["10-06", "22:20", "engine", ["split 两槽开图片（自编 HIP strata-vision）", "pictures on the two split slots (self-built HIP strata-vision)"], ["用户要图片；官方 AMD 只给 CPU 编码器", "pictures wanted; official AMD builds had only the CPU encoder"], [[["主卡缓存 −11%，32K prompt −3.6%", "main card cache −11%, 32K prompt −3.6%"], "down"], [["640×480 图 3.2 s", "640×480 image 3.2 s"], "flat"]]],
+ ["10-07", "16:54", "prompt", ["4592281：rocBLAS 解存本机缓存（E357）", "4592281: rocBLAS solutions cached on this PC (E357)"], ["select 的解每次启动现测，两卡/两次会挑不同解，文本偶尔变", "select's solutions were re-measured at every start; the two cards / two starts picked different ones and text sometimes changed"], [[["速度持平，解不再随启动变", "same speed, solutions no longer change between starts"], "flat"]]],
+ ["10-07", "21:00", "prompt", ["#1151 改为 SIMT 打分核（上游 65ce329 移植，E358–E360）", "#1151 as a SIMT scoring kernel (port of upstream 65ce329, E358–E360)"], ["FP32 分块核比 rocBLAS SGEMM 快，不要表、不要实测、逐字节一致", "an FP32 tiled kernel beats rocBLAS SGEMM: no table, no measuring, byte-identical"], [[["128K prompt +7.4%", "128K prompt +7.4%"], "up"], [["32K +0.8%", "32K +0.8%"], "flat"]]],
+ ["10-07", "22:10", "prompt", ["图片编码器挪到 HIP0（E362）", "picture encoder moved to HIP0 (E362)"], ["主卡被编码器占显存，另一张卡本来在等", "the encoder took the main card's VRAM while the other card waited"], [[["主卡缓存 5,256 → 6,123 槽", "main card cache 5,256 → 6,123 slots"], "up"], [["32K prompt +2.8~3.8%", "32K prompt +2.8~3.8%"], "up"]]],
+ ["10-08", "01:00", "drop", ["strata-ud-q4 槽：UD-Q4_K_XL 在 HIP 分层跑通（E364–E366）", "strata-ud-q4 slot: UD-Q4_K_XL running on the HIP layer split (E364–E366)"], ["和 IQ3_S 比质量（GSQ 用 xhigh 推理校准）", "compare quality with IQ3_S (GSQ calibrated with xhigh reasoning)"], [[["解码 −38%、32K prompt −3%", "decode −38%, 32K prompt −3%"], "down"], [["只用于比质量", "for quality comparison only"], "flat"]]],
+ ["10-08", "19:25", "prompt", ["q8k-4592281：ggml 换成 llama-q2k（E380）", "q8k-4592281: ggml swapped for llama-q2k (E380)"], ["Strata 的专家 prompt 矩阵乘就是 llama.cpp 的 MMQ；q8_0/iq3_s 的 dot 链头改 VOP3P 省掉清零 mov", "Strata's expert prompt GEMMs are llama.cpp's MMQ; the q8_0/iq3_s dot-chain heads in VOP3P drop a zeroing mov"], [[["iq3_s 内核 +2.6%", "iq3_s kernel +2.6%"], "up"], [["32K prompt +1.4~1.5%，12 条输出逐字相同", "32K prompt +1.4~1.5%, 12 outputs identical"], "up"]]],
+ ["10-08", "20:30", "drop", ["--kv-resident 32K → 16K（E382）", "--kv-resident 32K → 16K (E382)"], ["想把 VRAM 让给专家缓存", "give the VRAM to the expert cache"], [[["专家槽只 +0.7%：Flash-Next 的 KV 常驻才一百多 MB", "expert slots only +0.7%: Flash-Next's resident KV is only ~100 MB"], "flat"], [["32K 解码 −3%", "32K decode −3%"], "down"]]],
+ ["10-08", "21:25", "engine", ["生产升 0.1.41（strata-141-d14ca361，E383）", "production → 0.1.41 (strata-141-d14ca361, E383)"], ["跟上上游 151 个提交；7 个补丁 rebase 无冲突", "catch up 151 upstream commits; 7 patches rebased without conflicts"], [[["12 条输出逐字相同、速度 ±0.5%、0 停转", "12 outputs identical, speed ±0.5%, 0 stalls"], "flat"], [["json 加 gpu_order=as_given 保住卡序", "json gets gpu_order=as_given to keep the card order"], "flat"]]],
+ ["10-08", "21:27", "drop", ["--pipeline-windows 2（E384）", "--pipeline-windows 2 (E384)"], ["第二卡验证本窗时第一卡提前算下一窗", "the first card computes the next window while the second verifies this one"], [[["解码 +1~6%", "decode +1~6%"], "flat"], [["输出跨启动不确定（2/7 同）、4K prompt −1~5%", "output differs between starts (2/7 identical), 4K prompt −1~5%"], "down"]]],
+ ["10-08", "21:50", "drop", ["--spec × --spec-min-p 16 点网格（E385/E385b）", "--spec × --spec-min-p, 16-point grid (E385/E385b)"], ["每窗 33 ms 固定，速度取决于每窗接受数", "each window costs a fixed 33 ms; speed depends on accepted tokens per window"], [[["只有 5/0.6 在 32K +2.5%（单轮）", "only 5/0.6 +2.5% at 32K (one round)"], "flat"], [["其余全负，4/0.5 是峰值", "all others negative; 4/0.5 is the peak"], "down"]]],
+ ["10-08", "23:42", "decode", ["--spec 3 --spec-min-p 0.7 + --pipeline-windows 2（E387）", "--spec 3 --spec-min-p 0.7 + --pipeline-windows 2 (E387)"], ["E384/E385 各自单变量都否定了，但短草稿几乎全接受（83% vs 68%）时，第二窗的推测才命中——两个旋钮有交互", "E384 and E385 each failed alone, but when the short draft is almost always accepted (83% vs 68%), the second window's speculation hits: the two knobs interact"], [[["解码 4K +10~16%、32K +8~11%，三轮确认", "decode 4K +10~16%, 32K +8~11%, three confirmation rounds"], "up"], [["prompt 不变；输出跨启动不确定（基线是确定的）；128K 无编码器配置下 +11%（E388）；10-09 00:16 上生产", "prompt unchanged; output differs between starts (the baseline is deterministic); 128K +11% without the encoder (E388); production 10-09 00:16"], "flat"]]],
+ ["10-08", "22:50", "drop", ["并发批槽（--batch N，0.1.41 的 batch-groups auto）", "concurrent batch slots (--batch N, batch-groups auto in 0.1.41)"], ["两卡流水能不能提总吞吐", "can the two-card pipeline raise total throughput?"], [[["常驻专家 41% < 门槛 50%；槽里不带 MTP", "resident experts 41% < the 50% gate; slots carry no MTP"], "down"], [["单人使用无意义，不测", "pointless for one user, not measured"], "flat"]]],
+ ["10-09", "上午", "drop", ["flag 清单 K1：35 个开关/档位逐个单变量（E395–E401）", "flag list K1: 35 switches/settings one at a time (E395–E401)"], ["把上游 Strix Halo / CUDA 上有效的内核族开关、借槽、缓存、放置、草稿开关在本机各测一遍", "test every kernel-family switch, slot borrowing, cache, placement and draft switch that helped upstream on Strix Halo / CUDA"], [[["单独没有一个超过噪声；17 个明确变慢（SPLIT_OWN / no-prefill-borrow 32K −35%）", "none beats the noise alone; 17 clearly slower (SPLIT_OWN / no-prefill-borrow 32K −35%)"], "down"], [["六个噪声内的叠加解码 +1%，生产里测不出，归档", "the six within noise stacked: decode +1%, not measurable in production, archived"], "flat"]]],
+ ["10-10", "13:40", "drop", ["0.1.42 其余 opt-in（E413）", "the other 0.1.42 opt-ins (E413)"], ["TAIL_SKIP=7 / ROUTE_RESIDENT / aux-cpus / RESIDENT_SORT / PF_FUSED 逐个单变量", "TAIL_SKIP=7 / ROUTE_RESIDENT / aux-cpus / RESIDENT_SORT / PF_FUSED one at a time"], [[["TAIL_SKIP +4/+1% 在 ±6% 噪声内且改答案；ROUTE_RESIDENT 命中 98.7% 却慢 1~3.5%", "TAIL_SKIP +4/+1% within ±6% noise and changes answers; ROUTE_RESIDENT hits 98.7% yet 1~3.5% slower"], "down"], [["RESIDENT_SORT 要整层全常驻、PF_FUSED 只有 gfx11/12：本机空操作", "RESIDENT_SORT needs whole layers resident, PF_FUSED is gfx11/12 only: no-ops here"], "flat"]]],
+ ["10-10", "14:33", "prompt", ["生产升 0.1.42 + STRATA_SPLIT_MTP_BATCH=1（strata-142-cd87f4d2，E413）", "production → 0.1.42 + STRATA_SPLIT_MTP_BATCH=1 (strata-142-cd87f4d2, E413)"], ["分层时草稿层的 prompt K/V 改走 prompt 路径的 MMQ，不再每 8 行一次小批", "on a split, the draft layer's prompt K/V goes through the prompt path's MMQ instead of small 8-row batches"], [[["prompt +4.1 / +6.9 / +2.0%（4K/32K/128K，三轮同向），解码与接受率不变", "prompt +4.1 / +6.9 / +2.0% (4K/32K/128K, three rounds same direction), decode and acceptance unchanged"], "up"], [["0.1.42 本身与 0.1.41 固定协议下逐字相同、速度持平", "0.1.42 itself is identical to 0.1.41 under the fixed protocol, same speed"], "flat"]]],
+ ["10-10", "23:38", "drop", ["llama.cpp RDNA2 MMQ 补丁放进 Strata（E414，对照 PR #1897）", "the llama.cpp RDNA2 MMQ patches inside Strata (E414, against PR #1897)"], ["27B 上值 +5~11% 的补丁能否帮 Strata 的 UD-Q4 专家 GEMM", "patches worth +5~11% on the 27B: do they help Strata's UD-Q4 expert GEMMs?"], [[["prompt ±1%；Q8_K 激活版 8K 解码 −7%", "prompt ±1%; the Q8_K activation version −7% decode at 8K"], "down"], [["专家 GEMM 只占 prompt 34%、行数形状不同；strata_mmq 本来就没编 Q8K 宏", "expert GEMMs are only 34% of the prompt, other row shapes; strata_mmq never compiled the Q8K macros"], "flat"]]],
+ ["10-12", "02:00", "decode", ["strata-ud-q4 补上 E387 解码配置（E422/E423）", "the E387 decode config on strata-ud-q4 too (E422/E423)"], ["E387 上线时只改了 IQ3_S 两个槽；同一机制在 UD-Q4 上是否成立", "E387 went live on the two IQ3_S slots only; does the same mechanism hold on UD-Q4?"], [[["解码 4K / 32K / 128K +13.5 / +9.6 / +5.2%", "decode 4K / 32K / 128K +13.5 / +9.6 / +5.2%"], "up"], [["prompt −0.3%，草稿接受 66 → 79%", "prompt −0.3%, draft acceptance 66 → 79%"], "flat"]]],
+ ["10-11", "01:57", "engine", ["strata-ud-q4 槽升 0.1.42 + KQUANTS + SPLIT_MTP_BATCH（E415，社区报告 #1927）", "strata-ud-q4 → 0.1.42 + KQUANTS + SPLIT_MTP_BATCH (E415, community report #1927)"], ["IQ3_S 与 UD-Q4_K_XL × 单卡/分层 × 原版/PR 八臂", "IQ3_S and UD-Q4_K_XL × one card / split × stock / PRs, eight arms"], [[["UD-Q4 分层 756 / 1,748 / 1,981，解码 45~51（旧槽 715 / 1,640，43~46）", "UD-Q4 split 756 / 1,748 / 1,981, decode 45~51 (old slot 715 / 1,640, 43~46)"], "up"], [["原版 prompt 两格式相同（稠密 FP16 路径是上限）；UD-Q4 解码比 IQ3_S 慢 30~35%", "stock prompt equal for both formats (the dense FP16 path is the limit); UD-Q4 decode 30~35% slower than IQ3_S"], "flat"]]],
+ ["10-12", "14:55", "decode", ["验证器的 hc 读改成一个常驻内核（E424–E427，STRATA_HC_PERSIST=1）", "the verifier's hc read as one persistent kernel (E424–E427, STRATA_HC_PERSIST=1)"], ["每层开头的 hc 读是几个小内核，窗口只有 ≤8 token 时时间耗在发射和同步上；改成 80 块常驻 + 两道网格屏障", "the hc read at each layer was several small kernels; with ≤8 tokens per window the time went to launches and syncs; now 80 resident blocks + two grid barriers"], [[["每个验证窗口 −2.5~2.8%", "each verify window −2.5~2.8%"], "up"], [["非逐位，但离 double 参照更近", "not bitwise, but closer to the double reference"], "flat"]]],
+ ["10-12", "16:51", "drop", ["上游 0.1.43.1 评估（E432/E433）", "upstream 0.1.43.1 evaluated (E432/E433)"], ["跟上上游；看 #2055 的 gfx103x 侧流在 Linux 上有没有用", "keep up with upstream; does #2055's gfx103x side stream help on Linux?"], [[["解码持平、prompt −0.5%；侧流在本机中性", "decode flat, prompt −0.5%; side stream neutral here"], "flat"], [["不升级，补丁 rebase 后留作底座", "not upgraded; patches rebased and kept as a base"], "down"]]],
+ ["10-12", "22:02", "decode", ["常驻 hc 读精简自适应版（strata-142-hcpa-2712fb13，E439）", "persistent hc read, lean adaptive version (strata-142-hcpa-2712fb13, E439)"], ["能不能驻留只靠启动时实跑检查：占用率 API 在 Ubuntu 的 HIP 7.1 下过保守、ROCm 10 下过乐观", "residency decided only by a real launch at start: the occupancy API is too conservative on Ubuntu's HIP 7.1 and too optimistic on ROCm 10"], [[["与上一版逐位相同，每窗再 −0.8~1.4%", "bitwise identical to the previous version, another −0.8~1.4% per window"], "up"]]],
+ ["10-13", "11:30", "engine", ["四个引擎 PR 按上游门槛重测（E448）", "four engine PRs re-measured to the upstream bar (E448)"], ["维护者要的是当前版本 + 10 对交错 A/B 中位数 + gfx103x ctest", "the maintainers want the current release + medians of 10 interleaved A/B pairs + gfx103x ctest"], [[["#2226 每窗 −6.6 / −4.4%；#1167 prompt +13.9 / +12.1%；#1992 解码 +8.0 / +9.5%；全部 10/10", "#2226 per window −6.6 / −4.4%; #1167 prompt +13.9 / +12.1%; #1992 decode +8.0 / +9.5%; all 10/10"], "up"], [["#1151 从 0.1.40 的 +7.4% 缩到 128K +3.2%", "#1151 shrank from +7.4% on 0.1.40 to +3.2% at 128K"], "down"]]],
+ ["10-13", "13:46", "prompt", ["时间分解：原版对比调优后（E449，docs/linux-dual-6900xt 的「时间花在哪」）", "where the time goes: stock against tuned (E449, \"where the time goes\" in docs/linux-dual-6900xt)"], ["同一版本 0.1.43.1 上把两边的 prompt 与解码按阶段拆开", "both sides split into phases, prompt and decode, on the same 0.1.43.1"], [[["prompt ×2.1~2.3（GDN 段 594 → 153 ms/千 token），解码 ×1.23~1.30", "prompt ×2.1~2.3 (GDN 594 → 153 ms per 1K tokens), decode ×1.23~1.30"], "up"], [["调优后专家段成了 prompt 最大的一块", "after tuning, the experts are the largest part of a prompt"], "flat"]]],
+ ["10-13", "15:42", "drop", ["prompt 专家段：MMQ 上限、tile 宽度、原地读（E450–E452）", "prompt experts: MMQ ceiling, tile width, in-place reads (E450–E452)"], ["专家段占调优后 prompt 的 ~37%，看还能不能挖", "the experts are ~37% of a tuned prompt; is there more to dig?"], [[["MMQ 在真实形状上 28–34 TOPS 封顶；换 tile 宽度不省时", "MMQ tops out at 28–34 TOPS on the real shapes; another tile width saves nothing"], "flat"], [["原地读、不再搬运（输出逐位相同）只 +0.5%，不采用", "reading in place instead of gathering (bitwise identical) only +0.5%, not adopted"], "down"]]],
+ ["10-13", "18:29", "drop", ["0.1.44 的 STRATA_HC_Q8 在 gfx1030（E454）", "0.1.44's STRATA_HC_Q8 on gfx1030 (E454)"], ["hc 投影改读 Q8_0，RDNA4 上默认开、解码 +2.5~4%；它会让常驻 hc 读让位", "hc projections read as Q8_0, on by default on RDNA4 with decode +2.5~4%; it displaces the persistent hc read"], [[["每窗 4K +2.4%、32K +1.0%（更慢），prompt −0.7~1%", "per window 4K +2.4%, 32K +1.0% (slower), prompt −0.7~1%"], "down"], [["本机 hc 读受发射限制，不受带宽限制", "the hc read here is launch-bound, not bandwidth-bound"], "flat"]]],
+ ["10-13", "23:40", "prompt", ["#2071 的 SIMT=2 打分在 HIP 上接通（E457）", "#2071's SIMT=2 scorer wired up on HIP (E457)"], ["上游的 =2 只在 CUDA 生效，HIP 上静默退回 warp 核", "upstream's =2 only worked on CUDA and silently fell back to the warp kernel on HIP"], [[["prompt +1%（0.1.44）；0.2.0 上 119K −6.5%（E503，10/10）", "prompt +1% (0.1.44); on 0.2.0 119K −6.5% (E503, 10/10)"], "up"], [["送 PR #3073", "sent as PR #3073"], "flat"]]],
+ ["10-15", "19:30", "decode", ["两路并发 A/B/C（E463–E470，strata-144-pmtp-a380c2c0）", "two parallel requests, A/B/C (E463–E470, strata-144-pmtp-a380c2c0)"], ["parallel 2 下第二个请求要等 12 s；--batch 还关掉了单路的 pipeline-windows", "with parallel 2 a second request waited 12 s; --batch also turned off the solo path's pipeline-windows"], [[["第二请求首字 12 → 0.5 s，长读插短 37 → 8 s，两路 +6%", "second request's first token 12 → 0.5 s, a short read behind a long one 37 → 8 s, two streams +6%"], "up"], [["A = 单路保留 pipeline-windows（PR #3095）", "A = the solo path keeps pipeline-windows (PR #3095)"], "flat"]]],
+ ["10-18", "13:09", "engine", ["生产升 0.1.45（strata-145-acx，E475）", "production → 0.1.45 (strata-145-acx, E475)"], ["原版 0.1.45 缺 A，单路解码 −11~16%；带上 A + C + SIMT2 后持平", "stock 0.1.45 lacks A: solo decode −11~16%; with A + C + SIMT2 it ties"], [[["与旧生产打平，补丁从 9 个减到 3 个", "ties the old production, patches down from 9 to 3"], "flat"]]],
+ ["10-18", "21:10", "decode", ["上游 #2985 流水 MTP 换掉我们的 C（E481）", "upstream #2985 pipelined MTP replaces our C (E481)"], ["JacobSussan 的延迟提交做法：接受后不回填重算", "JacobSussan's deferred commit: no backfill recompute after acceptance"], [[["两路总吞吐 +13%，单路与交接不变，找针 14/14", "two streams +13% total, solo and handover unchanged, needles 14/14"], "up"]]],
+ ["10-19", "02:20", "prompt", ["STRATA_PREFILL_STREAM_MIN=2048（E482–E485）", "STRATA_PREFILL_STREAM_MIN=2048 (E482–E485)"], ["<2K 的短 prompt 有 43–54% 时间在等 PCIe 搬专家", "prompts under 2K spent 43–54% of their time waiting for experts over PCIe"], [[["真实文本 1.1–1.5K −6~17%，≥2048 不变", "real text 1.1–1.5K −6~17%, ≥2048 unchanged"], "up"], [["合成提示词让 3072 看起来更好，真实文本否掉", "synthetic prompts made 3072 look better; real text ruled it out"], "flat"]]],
+ ["10-19", "17:40", "prompt", ["--batch 下也用 CPU 分担（E493/E494，PR #3382）", "CPU share beside --batch too (E493/E494, PR #3382)"], ["上游 batch>0 时直接关掉 CPU 分担", "upstream turned the CPU share off whenever batch > 0"], [[["<2048 token 的读 −20~35%，续写 455 token 1.86 → 1.25 s", "reads under 2,048 tokens −20~35%, a 455-token follow-up 1.86 → 1.25 s"], "up"], [["≥2048 与并发不变", "≥2048 and concurrency unchanged"], "flat"]]],
+ ["10-19", "20:30", "prompt", ["RDNA2 读 prompt 注意力（E495–E498e，PR #3381）", "RDNA2 prompt attention (E495–E498e, PR #3381)"], ["gfx103x 读 prompt 借用解码内核：64 单元切块 + 合并", "gfx103x read prompts with the decode kernel: 64-cell tiles + a merge"], [[["注意力每块 500 → 355 ms，34K / 133K −3.5%", "attention per chunk 500 → 355 ms, 34K / 133K −3.5%"], "up"], [["质量门（8 段对 FP64 注意力参照）不劣", "quality gate (8 segments against an FP64 attention reference) not worse"], "flat"]]],
+ ["10-19", "22:15", "drop", ["SeqMoE 式专家预取的上界（E499）", "upper bound of SeqMoE-style expert prefetch (E499)"], ["26.6 万条真实 agent 路由回放", "266K real agent routing decisions replayed"], [[["现缓存命中 85%，高于全知静态集；完美的 8 窗预测器也不更好", "today's cache hits 85%, above an all-knowing static set; a perfect 8-window predictor is no better"], "down"], [["杠杆是每窗换入量，不是预测", "the lever is swaps per window, not prediction"], "flat"]]],
+ ["10-20", "03:10", "engine", ["两个补丁按上游新规在 0.2.0 上复测并发 PR（E501–E503）", "the patches re-measured on 0.2.0 to the new upstream rules, PRs filed (E501–E503)"], ["setup.py 构建、逐字节默认路径、ctest、10 对交错、FP64 参照质量门、CUDA 13.2 编译", "setup.py build, byte-identical default path, ctest, 10 interleaved pairs, FP64 reference quality gate, CUDA 13.2 build"], [[["#3381 −3.49%（10/10）、#3382 短读 −28.8%（10/10）", "#3381 −3.49% (10/10), #3382 short reads −28.8% (10/10)"], "up"], [["#3073 / #3095 在 0.2.0 上 −6.5% / +12~16%", "#3073 / #3095 on 0.2.0: −6.5% / +12~16%"], "up"]]],
+ ["10-13", "20:10", "engine", ["生产升 0.1.44（strata-144-hcpa-efa52cd1，E454/E455）", "production → 0.1.44 (strata-144-hcpa-efa52cd1, E454/E455)"], ["补丁合入只有 setup.py 一处冲突；用生产配置原样对现生产 A/B", "one conflict (setup.py) in the merge; A/B against production with the production config as is"], [[["32K 每窗 −1.4%（3/3），其余噪声内，0 停转", "32K per window −1.4% (3/3), the rest within noise, 0 stalls"], "up"], [["UD-Q4 槽不升：K-quant prompt 要 STRATA_MMQ_KQ=1，加后解码 −1.2%", "UD-Q4 slot not upgraded: K-quant prompts need STRATA_MMQ_KQ=1, which costs −1.2% decode"], "flat"]]],
+ ["10-20", "16:40", "engine", ["生产升 0.2.1.3（strata-0213-40d9a2dc，E516/E517）", "production → 0.2.1.3 (strata-0213-40d9a2dc, E516/E517)"], ["上游 0.2.1.3 + #2985 移植 + 5 个自有补丁，生产配置原样 3 对 A/B", "upstream 0.2.1.3 + the #2985 port + 5 patches of ours, production config as is, 3 A/B pairs"], [[["读 prompt −0.2~−0.8%、解码在噪声内，0 停转", "prompt −0.2~−0.8%, decode within noise, 0 stalls"], "flat"], [["KL 0.034 / 0.029（旧 0.026）：逐段看是重分布不是变差", "KL 0.034 / 0.029 (old 0.026): segment by segment a redistribution, not worse"], "flat"]]],
+ ["10-21", "10:17", "stable", ["两卡降压 −81 mV @245 W（E522/E523）", "both cards undervolted −81 mV at 245 W (E522/E523)"], ["解码不随频率变（E507–E512），降压换温度和功耗", "decode does not follow the clock (E507–E512); undervolting buys temperature and power"], [[["37 轮 0 次翻转；card1 到 −88 就有翻转", "37 rounds, 0 flipped tokens; card1 flips at −88"], "flat"]]],
+ ["10-22", "18:47", "engine", ["生产升 0.2.2（strata-022-34cd8534，E527）", "production → 0.2.2 (strata-022-34cd8534, E527)"], ["合并 v0.2.2，补丁、ggml、构建选项都不变", "v0.2.2 merged; patches, ggml and build options unchanged"], [[["KL 0.028 / 0.030 对 0.031，持平；8 段里 7 段逐位相同", "KL 0.028 / 0.030 against 0.031, flat; 7 of 8 segments bitwise identical"], "flat"]]],
+ ["10-23", "13:27", "engine", ["生产升 0.2.3（strata-023-b523b933，E533）", "production → 0.2.3 (strata-023-b523b933, E533)"], ["合并 v0.2.3；它把会话缓存改成默认按内存自动开", "v0.2.3 merged; it turns the conversation cache on automatically by memory"], [[["自动缓存让单会话读 prompt −3% / −1.4%，配置钉 --conversation-cache-mib 0", "the automatic cache reads a single session's prompts −3% / −1.4%; the config pins --conversation-cache-mib 0"], "down"], [["钉住后 1,008 / 1,800 / 2,171、解码 75 / 79 / 78，与 022 持平", "pinned: 1,008 / 1,800 / 2,171, decode 75 / 79 / 78, equal to 022"], "flat"]]]
 ];
 const on=new Set(Object.keys(LANES));
-const F=document.getElementById('filters');
-Object.entries(LANES).forEach(([k,[name,col]])=>{const b=document.createElement('button');b.type='button';b.id='f-'+k;b.setAttribute('aria-pressed','true');
-  b.innerHTML=`<i class="dot" style="background:${col}"></i>${name}`;b.onclick=()=>{on.has(k)?on.delete(k):on.add(k);b.setAttribute('aria-pressed',on.has(k));render();};F.append(b);});
-function render(){
+function drawFilters(){
+  const F=document.getElementById('filters');F.innerHTML='';
+  Object.entries(LANES).forEach(([k,[name,col]])=>{const b=document.createElement('button');b.type='button';b.setAttribute('aria-pressed',on.has(k));
+    b.innerHTML=`<i class="dot" style="background:${col}"></i>${L2(name)}`;b.onclick=()=>{on.has(k)?on.delete(k):on.add(k);b.setAttribute('aria-pressed',on.has(k));drawSteps();};F.append(b);});
+}
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+function drawSteps(){
   const tl=document.getElementById('tl');tl.innerHTML='';let day=null;
   S.filter(s=>on.has(s[2])).sort((a,b)=>(a[0]+a[1]).localeCompare(b[0]+b[1])).forEach(([d,t,lane,title,why,res])=>{
     if(d!==day){day=d;const h=document.createElement('div');h.className='day';h.textContent=d;tl.append(h);}
     const [ln,col]=LANES[lane];
+    const time=(t==='上午'&&LANG==='en')?'morning':t;
     const row=document.createElement('div');row.className='step';
-    row.innerHTML=`<div class="t">${t}</div><div class="rail"><i style="background:${col}"></i></div>`+
-      `<div class="card${lane==='drop'?' drop':''}"><h3><span class="lane" style="background:${col}">${ln}</span>${title}</h3>`+
-      `<div class="why">${why}</div><div class="res">${res.map(([x,dir])=>`<span class="pill ${dir}">${x}</span>`).join('')}</div></div>`;
+    row.innerHTML=`<div class="t">${time}</div><div class="rail"><i style="background:${col}"></i></div>`+
+      `<div class="card${lane==='drop'?' drop':''}"><h3><span class="lane" style="background:${col}">${L2(ln)}</span>${esc(L2(title))}</h3>`+
+      `<div class="why">${esc(L2(why))}</div><div class="res">${res.map(([x,dir])=>`<span class="pill ${dir}">${esc(L2(x))}</span>`).join('')}</div></div>`;
     tl.append(row);});
 }
-render();
+
+function setLang(l,remember){
+  LANG=l==='en'?'en':'zh';
+  document.documentElement.setAttribute('data-lang',LANG);
+  document.documentElement.lang=LANG==='en'?'en':'zh-CN';
+  document.title=LANG==='en'?'Flash-Next tuning timeline · 2x RX 6900 XT':'Flash-Next 调优时间线 · 2× RX 6900 XT';
+  document.getElementById('lang-zh').setAttribute('aria-pressed',LANG==='zh');
+  document.getElementById('lang-en').setAttribute('aria-pressed',LANG==='en');
+  if(remember){try{localStorage.setItem('lang',LANG);}catch(e){}}
+  drawSpeed();drawModes();drawWin();drawFilters();drawSteps();
+}
+(function(){
+  let l=window.PAGE_LANG||new URLSearchParams(location.search).get('lang');
+  if(!l){try{l=localStorage.getItem('lang');}catch(e){}}
+  if(!l) l=(navigator.language||'').toLowerCase().startsWith('zh')?'zh':'en';
+  document.getElementById('lang-zh').onclick=()=>setLang('zh',true);
+  document.getElementById('lang-en').onclick=()=>setLang('en',true);
+  setLang(l,false);
+})();
 </script>
 </body>
 </html>

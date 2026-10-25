@@ -11,6 +11,6 @@ Text and data: CC BY-NC 4.0.
 | `linux-breakdown-decode-e505.csv` | the same | ms per decoded token per phase, total, tok/s | `docs/breakdown-decode-*` (E505) |
 | `linux-modes-0.1.41-32k.csv` | stock / two switches / PRs / E387 config × one card / expert helper / layer split | prompt and decode tok/s at 32K | `docs/modes-chart-*` (E388 / E388a, Strata 0.1.41) |
 | `windows-steps.csv` | one RX 6900 XT, Windows 11, Strata's standard benchmark, step by step | `step` (zh), `step_en`, prompt tok/s at 4K and 16K, decode tok/s at 4K | `docs/win1x-chart-*`; the runs are in Strata PR #4012 |
-| `timeline-steps.zh.csv` | every step on the interactive timeline (Chinese) | date, time, line of attack (`engine` / `prompt` / `decode` / `stable` / `drop`), step, why, effects (`[up]` / `[flat]` / `[down]`) | `index.html` |
+| `timeline-steps.en.csv`, `timeline-steps.zh.csv` | every step on the interactive timeline (English / Chinese) | date, time, line of attack (`engine` / `prompt` / `decode` / `stable` / `drop`), step, why, effects (`[up]` / `[flat]` / `[down]`) | `index.html` |
 
 Raw per-request data for many experiments is in `../bench/results/eNNN/`.

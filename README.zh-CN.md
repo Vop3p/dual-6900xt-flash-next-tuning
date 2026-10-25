@@ -2,7 +2,7 @@
 
 <img src="docs/cover-zh.webp" alt="Strata 社区榜 AMD 双卡第一：2× RX 6900 XT，128K 2,041 tok/s，解码 82" width="100%">
 
-[English](README.md) · [交互版时间线](https://vop3p.github.io/dual-6900xt-flash-next-tuning/) · 给 AI 助手看的：[`llms.txt`](llms.txt)、[`AGENTS.md`](AGENTS.md)
+[English](README.md) · [交互版时间线](https://vop3p.github.io/dual-6900xt-flash-next-tuning/?lang=zh)（中文 / English） · 给 AI 助手看的：[`llms.txt`](llms.txt)、[`AGENTS.md`](AGENTS.md)
 
 在 AMD RX 6900 XT（RDNA2，gfx1030）上用 [Strata](https://github.com/Niko1221/Strata) 引擎跑 **Qwen3.8-Flash-Next（IQ3_S）** 的实测调优，另有 llama.cpp 跑稠密 27B 的一条线。所有数字都是下面这些机器上实测的，推算的会单独标明。
 

@@ -2,7 +2,7 @@
 
 <img src="docs/cover-en.webp" alt="#1 AMD dual-card in the Strata community index: 2x RX 6900 XT, 2,041 tok/s at 128K, 82 tok/s decode" width="100%">
 
-[中文](README.zh-CN.md) · [Interactive timeline](https://vop3p.github.io/dual-6900xt-flash-next-tuning/) (Chinese) · For AI assistants: [`llms.txt`](llms.txt), [`AGENTS.md`](AGENTS.md)
+[中文](README.zh-CN.md) · [Interactive timeline](https://vop3p.github.io/dual-6900xt-flash-next-tuning/?lang=en) (English / 中文) · For AI assistants: [`llms.txt`](llms.txt), [`AGENTS.md`](AGENTS.md)
 
 Measured tuning of **Qwen3.8-Flash-Next (IQ3_S)** on AMD RX 6900 XT (RDNA2, gfx1030) cards with the [Strata](https://github.com/Niko1221/Strata) engine, plus a dense 27B on llama.cpp. Every number was measured on the machines below; estimates are marked.
 

@@ -72,5 +72,5 @@ Expected (E533, `bench/benchmark.py` synthetic load, no vision encoder): prompt 
 - `README.md` / `README.zh-CN.md` — overview. `docs/*.md` (English) and `docs/*.zh-CN.md` (Chinese) — the same content.
 - `data/*.csv` — numbers behind the charts (`data/README.md` describes the columns).
 - `patches/llama.cpp/` — eight patches on llama.cpp `159c651f5`; `bench/results/eNNN/` — raw results.
-- `index.html` — interactive timeline (Chinese) and chart source; `tools/render_charts.py` renders `docs/*.png`.
+- `index.html` — interactive timeline (English and Chinese) and chart source; `tools/render_charts.py` renders `docs/*.png`.
 - License: code MIT, text and data CC BY-NC 4.0.

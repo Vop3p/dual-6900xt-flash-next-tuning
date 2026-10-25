@@ -20,8 +20,8 @@ Start with AGENTS.md for how to reproduce and what not to retry. English docs ar
 - [data/linux-breakdown-prompt-e505.csv](data/linux-breakdown-prompt-e505.csv), [data/linux-breakdown-decode-e505.csv](data/linux-breakdown-decode-e505.csv): per-phase time, stock vs tuned.
 - [data/windows-steps.csv](data/windows-steps.csv): Windows one-card standard-benchmark steps.
 - [data/linux-modes-0.1.41-32k.csv](data/linux-modes-0.1.41-32k.csv): one card vs expert helper vs layer split.
-- [data/timeline-steps.zh.csv](data/timeline-steps.zh.csv): every timeline step (Chinese).
+- [data/timeline-steps.en.csv](data/timeline-steps.en.csv), [data/timeline-steps.zh.csv](data/timeline-steps.zh.csv): every timeline step (English / Chinese).
 
 ## Optional
 - [bench/](bench/): A/B scripts (run_ab.sh, benchmark.py, ab_compare.py, monitor_amd.py) and raw results per experiment in bench/results/eNNN/.
-- [index.html](index.html): interactive timeline page (Chinese), source of the charts; tools/render_charts.py renders the PNGs.
+- [index.html](index.html): interactive timeline page (English and Chinese, ?lang=en / ?lang=zh), source of the charts; tools/render_charts.py renders the PNGs.
