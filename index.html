@@ -116,15 +116,15 @@ code{font-family:var(--f-data);font-size:.92em}
 <main>
 <section id="now">
   <h2><span class="zh">现在</span><span class="en">Now</span> · 2× RX 6900 XT · Qwen3.8-Flash-Next IQ3_S</h2>
-  <p class="now-sub"><span class="zh">Strata 0.2.3 + 5 个补丁 · 2026-10-23 实测（E533）</span><span class="en">Strata 0.2.3 + 5 patches · measured 2026-10-23 (E533)</span></p>
+  <p class="now-sub"><span class="zh">Strata 0.2.7 + 补丁 + 分块下限 #3821 · 2026-10-27 / 10-29 实测（E596、E617）</span><span class="en">Strata 0.2.7 + patches + chunk floor #3821 · measured 2026-10-27 / 10-29 (E596, E617)</span></p>
   <div class="now2">
     <div class="grp"><span class="lbl"><span class="zh">读 prompt tok/s</span><span class="en">prompt tok/s</span></span>
-      <div class="row"><div><b>1,008</b><small>4K</small></div><div><b>1,800</b><small>32K</small></div><div><b>2,171</b><small>128K</small></div></div></div>
+      <div class="row"><div><b>1,009</b><small>4K</small></div><div><b>1,342</b><small>8K</small></div><div><b>1,589</b><small>16K</small></div><div><b>1,786</b><small>32K</small></div></div></div>
     <div class="grp"><span class="lbl"><span class="zh">解码 tok/s</span><span class="en">decode tok/s</span></span>
-      <div class="row"><div><b>79</b><small><span class="zh">4K–128K 为 75–79；两路并发合计 60–64</span><span class="en">75–79 across 4K–128K; two streams together 60–64</span></small></div></div></div>
+      <div class="row"><div><b>81</b><small><span class="zh">4K / 32K 为 78–85；128K 仍是 0.2.3 时的 2,171 读 / 78 解码</span><span class="en">78–85 at 4K / 32K; 128K last measured on 0.2.3: 2,171 prompt / 78 decode</span></small></div></div></div>
   </div>
   <p class="foot now-src"><span class="zh">benchmark.py 合成负载，不开图片编码器，两轮 · 构建、开关与补丁见 docs/linux-dual-6900xt</span><span class="en">benchmark.py synthetic load, no vision encoder, two rounds · build, switches and patches: docs/linux-dual-6900xt</span></p>
-  <details class="now-more"><summary><span class="zh">生产配置细节</span><span class="en">Production configuration</span></summary><p class="foot"><span class="zh">生产（10-23 13:27 起）= Strata 上游 0.2.3 + #2985 流水 MTP（STRATA_PIPED_MTP=2，JacobSussan）+ 自有补丁：单路保留 pipeline-windows（STRATA_PW_WITH_BATCH=1，PR #3095）、HIP 上的 SIMT=2 打分（PR #3073）、--batch 下的 CPU 分担（PR #3382）、RDNA2 读 prompt 注意力（PR #3381）、rocBLAS 解的本机缓存 + STRATA_PREFILL_STREAM_MIN=2048 + 自改的 llama.cpp ggml；配置钉 --conversation-cache-mib 0（0.2.3 默认开的会话缓存让单会话读 prompt 慢 1.4–3%）。两路并发（parallel 2）；两卡降压 −81 mV @245 W（10-21 起）。</span><span class="en">Production (since 10-23 13:27) = Strata upstream 0.2.3 + #2985 pipelined MTP (STRATA_PIPED_MTP=2, JacobSussan) + own patches: the solo path keeps --pipeline-windows (STRATA_PW_WITH_BATCH=1, PR #3095), the SIMT=2 scorer on HIP (PR #3073), the CPU share beside --batch (PR #3382), the RDNA2 prompt attention (PR #3381), a per-device rocBLAS solution cache + STRATA_PREFILL_STREAM_MIN=2048 + a modified llama.cpp ggml; the config pins --conversation-cache-mib 0 (0.2.3's conversation cache, on by default, reads a single session's prompts 1.4–3% slower). Two parallel slots; both cards undervolted −81 mV at 245 W (since 10-21).</span></p></details>
+  <details class="now-more"><summary><span class="zh">生产配置细节</span><span class="en">Production configuration</span></summary><p class="foot"><span class="zh">生产（10-27 18:40 起 0.2.7，10-29 07:1x 起 027f：加 #3821 分块下限）= Strata 上游 0.2.7（#2985 流水 MTP 已在上游，#4121）+ 自有补丁：单路保留 pipeline-windows（STRATA_PW_WITH_BATCH=1，PR #3095）、HIP 上的 SIMT=2 打分（PR #3073）、--batch 下的 CPU 分担（PR #3382）、RDNA2 读 prompt 注意力（PR #3381）、rocBLAS 解的本机缓存 + STRATA_PREFILL_STREAM_MIN=2048 + 自改的 llama.cpp ggml；配置钉 --conversation-cache-mib 0（0.2.3 起默认开的会话缓存让单会话读 prompt 慢 1.4–3%）；--prefill-pipe 1600 + STRATA_PREFILL_PIPE_FLOOR=4096（上游 #3821，10-29 07:1x）让两卡流水把 7K–20K 切成每块 ≥4,096 的几块（对不设：8K +16%，对 3072：7K +8%、12K +3%、16K +5%）。两路并发（parallel 2）；两卡降压 −81 mV @245 W（10-21 起）。</span><span class="en">Production (0.2.7 since 10-27 18:40, the #3821 chunk floor since 10-29 07:1x) = Strata upstream 0.2.7 (the #2985 pipelined MTP is upstream now, #4121) + own patches: the solo path keeps --pipeline-windows (STRATA_PW_WITH_BATCH=1, PR #3095), the SIMT=2 scorer on HIP (PR #3073), the CPU share beside --batch (PR #3382), the RDNA2 prompt attention (PR #3381), a per-device rocBLAS solution cache + STRATA_PREFILL_STREAM_MIN=2048 + a modified llama.cpp ggml; the config pins --conversation-cache-mib 0 (the conversation cache, on by default since 0.2.3, reads a single session's prompts 1.4–3% slower); --prefill-pipe 1600 with STRATA_PREFILL_PIPE_FLOOR=4096 (upstream #3821, since 10-29 07:1x) makes the two-card pipeline cut 7K–20K prompts into chunks of at least 4,096 (against off: 8K +16%; against 3072: 7K +8%, 12K +3%, 16K +5%). Two parallel slots; both cards undervolted −81 mV at 245 W (since 10-21).</span></p></details>
 </section>
 
 <section id="speed-sec">
@@ -160,6 +160,39 @@ code{font-family:var(--f-data);font-size:.92em}
   </div>
   <div class="panel"><div class="chart" id="win1x"></div><p class="swipe"><span class="zh">← 图可以左右滑动 →</span><span class="en">← the chart scrolls sideways →</span></p>
   <p class="foot"><span class="zh">Strata 标准基准（strata bench run，三次中位，12/12），每一步一次完整运行，原始数据在社区报告 PR #4012。前六步都是官方 rdna2 包 0.1.48 原样，只改设置；最后一点（虚线）是 main + 拷贝事件补丁 #4005 在本机自编，同样 8192 chunk（E559，12/12，#4012 里的 …-9b72e2b1）：4K 586 → 809、16K 1,076 → 1,125、解码 42 → 45.5。同一二进制用 auto chunk（6144）时 16K 只有 979。保留 700 MiB 那次换页、12 题 0/12，不在曲线上。</span><span class="en">Strata's standard benchmark (strata bench run, medians of three, 12/12), one complete run per step; the runs are in community report PR #4012. The first six steps are the official rdna2 package 0.1.48 unchanged, settings only; the dashed last step is main + the copy-event patch #4005 built on the PC, at the same 8,192 chunk (E559, 12/12, …-9b72e2b1 in #4012): 4K 586 → 809, 16K 1,076 → 1,125, decode 42 → 45.5. The same build at the auto chunk (6,144) read 16K at only 979. The 700 MiB reserve run paged (0/12) and is not on the curve.</span></p></div>
+</section>
+
+<section id="pipe-sec">
+  <h2><span class="zh">读 prompt 随长度：--prefill-pipe 与分块下限（0.2.7，两卡分层，10-29）</span><span class="en">Prompt speed by length: --prefill-pipe and a chunk floor (0.2.7, layer split, 10-29)</span></h2>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--l-drop)"></i><span class="zh">不设（今天的分块）</span><span class="en">off (today's chunks)</span></span>
+    <span><i class="dot" style="background:var(--l-stable)"></i>--prefill-pipe 1536</span>
+    <span><i class="dot" style="background:var(--l-prompt)"></i>--prefill-pipe 3072</span>
+    <span><i class="dot" style="background:var(--l-decode)"></i><span class="zh">1600 + STRATA_PREFILL_PIPE_FLOOR=4096（#3821，生产）</span><span class="en">1600 + STRATA_PREFILL_PIPE_FLOOR=4096 (#3821, production)</span></span>
+  </div>
+  <div class="panel"><div class="chart" id="pipe"></div>
+  <p class="foot"><span class="zh">E613，同一个冷启动引擎（生产 027 配置，parallel 1，无图片编码器），每条请求用 strata_tune.prefill_pipe 切换，每值前后都插一条"不设"对照，合成文本，中位数。两卡分层的读 prompt 是两段流水：分块太大时第二张卡空等，太小时每块固定开销变多。1536 让 8K–16K 都切成多块（+16% / +12% / +5%），但 4K 也被切成两块，慢 23%；3072 只在 8K（2×4096，+16%）和 12K（2×6144，+8%）改分块，4K / 16K / 32K 不动。真实文本终判同向：8K 1,145 → 1,327、12K 1,341 → 1,453、4K 1,026 → 1,017。没有一个值能既不切 4K 又切 16K：按引擎成本式把 R = 1–20,000 全算一遍，2,976–3,400 与 3072 方案完全相同（切出来的块都 ≥4,096）；更小的 R 先切 7K、6K、5K 成 &lt;4,096 的小块，≤1,700 才切 16K 但也切 4K。成本式把每块固定开销当常数，实测块 &lt;4,096 罚得重得多，所以更好的是给分块加下限，不是换数字。E617 测了上游 #3821 的 STRATA_PREFILL_PIPE_FLOOR=4096 配 1600（紫色，同一引擎每请求切换、两侧夹 3072 对照）：7K +8%（切成 4096 + 尾块，一块够大就赚）、12K +3%、14K +4%、16K +5%、20K +2%，4K / 8K 不变，真实文本同向，10-29 07:1x 上生产。空白 = 该值没测（32K 两者分块相同）。</span><span class="en">E613, one cold engine (the production 027 config, parallel 1, no picture encoder), the value switched per request with strata_tune.prefill_pipe and an "off" control before and after every value, synthetic text, medians. On a layer split the prompt runs as a two-stage pipeline: chunks too big leave the second card waiting, too small pay a fixed cost per chunk. 1536 splits 8K–16K (+16% / +12% / +5%) but also cuts 4K in two, 23% slower; 3072 re-chunks only 8K (2×4096, +16%) and 12K (2×6144, +8%) and leaves 4K / 16K / 32K alone. The real-text check agrees: 8K 1,145 → 1,327, 12K 1,341 → 1,453, 4K 1,026 → 1,017. No value splits 16K without also splitting 4K: running the engine's cost formula for R = 1–20,000, everything from 2,976 to 3,400 gives the same plan as 3072 (all chunks ≥4,096); smaller values first cut 7K, 6K, 5K into chunks under 4,096, and only ≤1,700 splits 16K, together with 4K. The formula charges each chunk a constant cost while chunks under 4,096 cost far more here, so the better fix is a chunk floor, not another number. E617 measured upstream #3821's STRATA_PREFILL_PIPE_FLOOR=4096 with 1600 (purple; same engine, switched per request, 3072 controls on both sides): 7K +8% (cut into 4096 plus a tail: one big chunk is enough to win), 12K +3%, 14K +4%, 16K +5%, 20K +2%, 4K / 8K unchanged, real text agrees; in production since 10-29 07:1x. A gap = not measured (at 32K the two plans are the same).</span></p></div>
+</section>
+
+<section id="one-sec">
+  <h2><span class="zh">一张卡上的两个开关：SH_STREAM 与 KVA（0.2.7，10-29）</span><span class="en">Two switches on one card: SH_STREAM and KVA (0.2.7, 10-29)</span></h2>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--l-drop)"></i><span class="zh">去掉 STRATA_SH_STREAM</span><span class="en">without STRATA_SH_STREAM</span></span>
+    <span><i class="dot" style="background:var(--l-prompt)"></i><span class="zh">生产开关组（含 SH_STREAM=1）</span><span class="en">production switches (SH_STREAM=1)</span></span>
+    <span><i class="dot" style="background:var(--l-decode)"></i><span class="zh">+ STRATA_KVA=1</span><span class="en">+ STRATA_KVA=1</span></span>
+  </div>
+  <div class="panel"><div class="chart" id="one"></div>
+  <p class="foot"><span class="zh">E615，一张 RX 6900 XT（GPU 1），生产 027 二进制与开关组，131072 上下文，parallel 1，合成文本，每个长度 2 次 × 2 个冷启动臂取中位，128 token 贪心解码，0 停转。SH_STREAM 在一张卡上解码 +5~7%（四个长度全同向，读 prompt 不变，0.1.40 起一直如此）。KVA 近似后 12 层的冷 prompt KV：16K +10%、32K +16% 读 prompt，解码 −2~3.5%，32K 针（深度 10/50/90）3/3；4K 没过门槛（4,096），8K 只有一块（第一块总是精确），所以 ≤8K 不变。KVA 只在单卡、无 batch 槽时生效，两卡分层用不上。</span><span class="en">E615, one RX 6900 XT (GPU 1), the production 027 binary and switches, 131072 context, parallel 1, synthetic text, median of 2 runs × 2 cold-started arms per length, 128-token greedy answers, 0 stalls. SH_STREAM is worth +5–7% decode on one card (same direction at all four lengths, prompt unchanged, true since 0.1.40). KVA approximates the last 12 layers' KV on cold prompts: +10% / +16% prompt at 16K / 32K, decode −2 to −3.5%, the 32K needle (depths 10/50/90) 3/3; 4K is under the 4,096 threshold and 8K is a single chunk (the first chunk is always exact), so ≤8K is unchanged. KVA applies to one card without batch slots only; a layer split cannot use it.</span></p></div>
+</section>
+
+<section id="std-sec">
+  <h2><span class="zh">Strata 标准基准，0.2.7（10-29，E616）：原版包对本机补丁，一张卡对两张卡</span><span class="en">Strata's standard benchmark on 0.2.7 (10-29, E616): release package vs this box's patches, one card vs two</span></h2>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--l-stable)"></i><span class="zh">4K prompt</span><span class="en">4K prompt</span></span>
+    <span><i class="dot" style="background:var(--l-prompt)"></i><span class="zh">16K prompt</span><span class="en">16K prompt</span></span>
+  </div>
+  <div class="panel"><div class="chart" id="std"></div>
+  <p class="foot"><span class="zh">strata bench run（协议 strata-qwen38-thinking-v1-draft.1，采样解码，三次取中位，每臂一次完整运行），全部 12/12、0 停转。"原版包" = 0.2.7 发布的 rx6000 引擎包 0.1.52 原样 + 上游已有开关（SH_STREAM、HIP_PROMPT_F16、HIP_ADAPT_KERNEL_COPY、HC_PERSIST 等）；包内 rocBLAS 5.4.0 与随附的 5.6.0 表不符，走默认内核。"补丁" = 本机生产 027（#3381、#3382、#3073、#3095 + 改过的 llama.cpp ggml + rocBLAS 5.6.0 表 + --prefill-pipe 3072）。"+ KVA" = 单卡补丁 + STRATA_KVA=1；协议的 4K prompt 是 4,084–4,088 token，没过 4,096 门槛，所以 4K 不变。补丁对原版包：读 prompt 单卡 +19% / +12%、双卡 +24% / +12%，解码在采样噪声内。D 轨（strata launch 默认配置）这次没跑成：0.2.7 的 launch 在本机连不上运行时宿主。</span><span class="en">strata bench run (protocol strata-qwen38-thinking-v1-draft.1, sampled decode, median of three, one full run per arm), all 12/12, 0 stalls. "Release package" = the 0.2.7 rx6000 engine package 0.1.52 as shipped plus the upstream opt-in switches (SH_STREAM, HIP_PROMPT_F16, HIP_ADAPT_KERNEL_COPY, HC_PERSIST and others); its rocBLAS is 5.4.0 and the shipped table is 5.6.0, so the default kernels run. "Patched" = this box's production 027 build (#3381, #3382, #3073, #3095, a modified llama.cpp ggml, the rocBLAS 5.6.0 table, --prefill-pipe 3072). "+ KVA" = one patched card plus STRATA_KVA=1; the protocol's 4K prompt is 4,084–4,088 tokens, under the 4,096 threshold, so 4K is unchanged. Patched against the release package: prompt +19% / +12% on one card, +24% / +12% on two; decode within the sampling noise. The default track (strata launch's setup) did not run this time: 0.2.7's launch could not reach its runtime host on this box.</span></p></div>
 </section>
 
 <section id="steps">
@@ -217,6 +250,8 @@ const M=[
   {k:'0.1.43.1+PRs\n10-13',p4:975,p32:1782,p128:2033,d:81.6},
   {k:['0.1.45+补丁\n10-20','0.1.45+patches\n10-20'],p4:1020,p32:1790,p128:2158,d:79.4},
   {k:['0.2.3+补丁\n10-23','0.2.3+patches\n10-23'],p4:1008,p32:1800,p128:2171,d:79.4},
+  {k:['0.2.6+补丁\n10-26','0.2.6+patches\n10-26'],p4:1010,p32:1789,p128:null,d:82.2},
+  {k:['0.2.7+补丁\n10-27','0.2.7+patches\n10-27'],p4:1009,p32:1786,p128:null,d:81.1},
 ];
 const SPEED_SER=[['p4','var(--l-stable)',['4K','4K']],['p32','var(--l-prompt)',['32K–37K','32K–37K']],['p128','var(--l-engine)',['128K','128K']],['d','var(--l-decode)',['解码','decode']]];
 
@@ -373,9 +408,46 @@ const S=[
  ["10-20", "16:40", "engine", ["生产升 0.2.1.3（strata-0213-40d9a2dc，E516/E517）", "production → 0.2.1.3 (strata-0213-40d9a2dc, E516/E517)"], ["上游 0.2.1.3 + #2985 移植 + 5 个自有补丁，生产配置原样 3 对 A/B", "upstream 0.2.1.3 + the #2985 port + 5 patches of ours, production config as is, 3 A/B pairs"], [[["读 prompt −0.2~−0.8%、解码在噪声内，0 停转", "prompt −0.2~−0.8%, decode within noise, 0 stalls"], "flat"], [["KL 0.034 / 0.029（旧 0.026）：逐段看是重分布不是变差", "KL 0.034 / 0.029 (old 0.026): segment by segment a redistribution, not worse"], "flat"]]],
  ["10-21", "10:17", "stable", ["两卡降压 −81 mV @245 W（E522/E523）", "both cards undervolted −81 mV at 245 W (E522/E523)"], ["解码不随频率变（E507–E512），降压换温度和功耗", "decode does not follow the clock (E507–E512); undervolting buys temperature and power"], [[["37 轮 0 次翻转；card1 到 −88 就有翻转", "37 rounds, 0 flipped tokens; card1 flips at −88"], "flat"]]],
  ["10-22", "18:47", "engine", ["生产升 0.2.2（strata-022-34cd8534，E527）", "production → 0.2.2 (strata-022-34cd8534, E527)"], ["合并 v0.2.2，补丁、ggml、构建选项都不变", "v0.2.2 merged; patches, ggml and build options unchanged"], [[["KL 0.028 / 0.030 对 0.031，持平；8 段里 7 段逐位相同", "KL 0.028 / 0.030 against 0.031, flat; 7 of 8 segments bitwise identical"], "flat"]]],
- ["10-23", "13:27", "engine", ["生产升 0.2.3（strata-023-b523b933，E533）", "production → 0.2.3 (strata-023-b523b933, E533)"], ["合并 v0.2.3；它把会话缓存改成默认按内存自动开", "v0.2.3 merged; it turns the conversation cache on automatically by memory"], [[["自动缓存让单会话读 prompt −3% / −1.4%，配置钉 --conversation-cache-mib 0", "the automatic cache reads a single session's prompts −3% / −1.4%; the config pins --conversation-cache-mib 0"], "down"], [["钉住后 1,008 / 1,800 / 2,171、解码 75 / 79 / 78，与 022 持平", "pinned: 1,008 / 1,800 / 2,171, decode 75 / 79 / 78, equal to 022"], "flat"]]]
+ ["10-23", "13:27", "engine", ["生产升 0.2.3（strata-023-b523b933，E533）", "production → 0.2.3 (strata-023-b523b933, E533)"], ["合并 v0.2.3；它把会话缓存改成默认按内存自动开", "v0.2.3 merged; it turns the conversation cache on automatically by memory"], [[["自动缓存让单会话读 prompt −3% / −1.4%，配置钉 --conversation-cache-mib 0", "the automatic cache reads a single session's prompts −3% / −1.4%; the config pins --conversation-cache-mib 0"], "down"], [["钉住后 1,008 / 1,800 / 2,171、解码 75 / 79 / 78，与 022 持平", "pinned: 1,008 / 1,800 / 2,171, decode 75 / 79 / 78, equal to 022"], "flat"]]],
+ ["10-26", "18:4x", "engine", ["生产升 0.2.6（strata-026-5c720e8e，E587）", "production → 0.2.6 (strata-026-5c720e8e, E587)"], ["合并 v0.2.6；补丁、ggml、构建选项不变", "v0.2.6 merged; patches, ggml and build options unchanged"], [[["读 prompt 1,010 / 1,789（4K / 32K），解码 80–85，与 0.2.3 持平", "prompt 1,010 / 1,789 (4K / 32K), decode 80–85, equal to 0.2.3"], "flat"]]],
+ ["10-27", "18:40", "engine", ["生产升 0.2.7（strata-027-9ca7fd21，E596）", "production → 0.2.7 (strata-027-9ca7fd21, E596)"], ["合并 v0.2.7（引擎 0.1.52，Qwen 新默认在 HIP 上全关，本机开关都显式写在配置里）", "v0.2.7 merged (engine 0.1.52; its new Qwen defaults are off on HIP, and this box sets its switches explicitly)"], [[["读 prompt 1,009 / 1,786，解码 78–85，持平", "prompt 1,009 / 1,786, decode 78–85, flat"], "flat"], [["0.2.7 的 STRATA_ROUTE_PRIOR=1.5 解码 +10% 但改答案、KL 门没过，不上（E604）", "0.2.7's STRATA_ROUTE_PRIOR=1.5: decode +10% but it changes answers and failed the KL gate, not taken (E604)"], "down"]]],
+ ["10-29", "05:06", "prompt", ["--prefill-pipe 3072 上生产（E613）", "--prefill-pipe 3072 in production (E613)"], ["两卡分层的读 prompt 是两段流水；把 8K 切成 2×4096、12K 切成 2×6144，第二张卡少空等；1536 也切 16K 但把 4K 切坏", "on a layer split the prompt is a two-stage pipeline; 8K becomes 2×4096 and 12K 2×6144 so the second card waits less; 1536 also splits 16K but breaks 4K"], [[["8K +16%、12K +8%（合成与真实文本同向）", "8K +16%, 12K +8% (synthetic and real text agree)"], "up"], [["4K / 16K / 32K 不动", "4K / 16K / 32K unchanged"], "flat"]]],
+ ["10-29", "05:45", "prompt", ["一张卡上的 SH_STREAM 与 KVA（E615）", "SH_STREAM and KVA on one card (E615)"], ["给单卡用户的数据（社区 #4475）；KVA 只在单卡无 batch 槽时生效，本机生产是两卡分层用不上", "data for one-card users (community #4475); KVA applies to one card without batch slots, so this box's layer split cannot use it"], [[["SH_STREAM 单卡解码 +5~7%", "SH_STREAM: one-card decode +5–7%"], "up"], [["KVA：16K +10%、32K +16% 读 prompt，解码 −2~3.5%，32K 针 3/3；≤8K 不变", "KVA: prompt +10% / +16% at 16K / 32K, decode −2 to −3.5%, 32K needle 3/3; ≤8K unchanged"], "flat"]]],
+ ["10-29", "07:1x", "prompt", ["分块下限上生产（上游 #3821，E617）", "chunk floor in production (upstream #3821, E617)"], ["成本式里每块开销是常数，单个 R 做不到既切 12K/16K 又不把 4K 切坏；#3821 的 STRATA_PREFILL_PIPE_FLOOR=4096 排除两块都小的分法，配 --prefill-pipe 1600", "the cost formula charges every chunk the same, so no single R splits 12K/16K without breaking 4K; #3821's STRATA_PREFILL_PIPE_FLOOR=4096 rules out plans whose chunks are all small, used with --prefill-pipe 1600"], [[["对 3072：7K +8%、12K +3%、14K +4%、16K +5%、20K +2%（真实文本同向）", "against 3072: 7K +8%, 12K +3%, 14K +4%, 16K +5%, 20K +2% (real text agrees)"], "up"], [["4K / 8K 不变", "4K / 8K unchanged"], "flat"]]]
 ];
 const on=new Set(Object.keys(LANES));
+// grouped bars: groups = [[zh,en]...]; series = [[[zh,en] name, colour, prompt[], decode[]]...]; panels = [[title zh/en, 'p'|'d', max, ticks]...]
+function drawBars(id,groups,series,panels){
+  const box=document.getElementById(id);box.innerHTML='';
+  const W=900,H=320,T=52,B=34,GAP=48,PW=(W-GAP*(panels.length-1))/panels.length;
+  const svg=el('svg',{viewBox:`0 0 ${W} ${H}`});
+  panels.forEach(([title,key,max,ticks],pi)=>{
+    const x0=pi*(PW+GAP),L=x0+46,R=x0+PW-6,y=v=>T+(H-T-B)*(1-v/max);
+    svg.append(el('text',{x:L,y:14,style:'font-size:11.5px'},L2(title)));
+    ticks.forEach(v=>{svg.append(el('line',{x1:L,x2:R,y1:y(v),y2:y(v),stroke:'var(--rule)'}));svg.append(el('text',{x:L-6,y:y(v)+4,'text-anchor':'end'},fmt(v)));});
+    const gw=(R-L)/groups.length, bw=Math.min(30,(gw-10)/series.length);
+    groups.forEach((g,i)=>{
+      const vals=series.map(s=>(key==='p'?s[2]:s[3])[i]); const n=vals.filter(v=>v!=null).length, xg=L+gw*i+(gw-n*bw)/2; let j=0;
+      L2(g).split('\n').forEach((t,li)=>svg.append(el('text',{x:L+gw*i+gw/2,y:H-B+16+li*13,'text-anchor':'middle',style:'font-size:11px'},t)));
+      series.forEach(([nm,col],si)=>{const v=vals[si]; if(v==null) return; const x=xg+bw*j++;
+        svg.append(el('rect',{x:x+1,y:y(v),width:bw-2,height:y(0)-y(v),fill:col,rx:2}));
+        const lx=x+bw/2+3.5, ly=y(v)-5;
+        svg.append(el('text',{x:lx,y:ly,transform:`rotate(-90 ${lx} ${ly})`,style:`fill:${col};font-size:10.5px`},key==='p'?fmt(v):v.toFixed(1)));});
+    });
+  });
+  box.append(svg);
+}
+function drawPipe(){drawBars('pipe',['4K','7K','8K','12K','14K','16K','20K','32K'],
+  [[['不设','off'],'var(--l-drop)',[1049,null,1158,1343,null,1519,null,1794],[]],['1536','var(--l-stable)',[806,null,1342,1501,null,1591,null,1794],[]],['3072','var(--l-prompt)',[1059,1145,1349,1467,1495,1522,1646,1791],[]],[['1600 + 下限 4096','1600 + floor 4096'],'var(--l-decode)',[1053,1237,1342,1516,1551,1589,1681,null],[]]],
+  [[['读 prompt tok/s（两卡分层，E613 / E617）','prompt tok/s (layer split, E613 / E617)'],'p',2000,[0,500,1000,1500,2000]]]);}
+function drawOne(){drawBars('one',['4K','8K','16K','32K'],
+  [[['去 SH_STREAM','no SH_STREAM'],'var(--l-drop)',[1056,1227,1240,1238],[50.1,50.2,49.2,49.5]],[['生产开关组','production'],'var(--l-prompt)',[1057,1224,1240,1240],[53.8,54.0,52.5,52.1]],['+ KVA','var(--l-decode)',[1055,1226,1363,1434],[53.8,54.2,51.5,50.4]]],
+  [[['读 prompt tok/s（一张卡）','prompt tok/s (one card)'],'p',1600,[0,400,800,1200,1600]],[['解码 tok/s（一张卡）','decode tok/s (one card)'],'d',60,[0,20,40,60]]]);}
+
+function drawStd(){drawBars('std',[['原版包\n两卡','release\ntwo cards'],['补丁\n两卡','patched\ntwo cards'],['原版包\n一卡','release\none card'],['补丁\n一卡','patched\none card'],['补丁 + KVA\n一卡','patched + KVA\none card']],
+  [['4K','var(--l-stable)',[829,1024,859,1023,1026],[66.0,66.5,47.5,44.9,43.6]],['16K','var(--l-prompt)',[1356,1516,1100,1232,1345],[74.0,66.9,45.1,49.1,45.5]]],
+  [[['读 prompt tok/s','prompt tok/s'],'p',1600,[0,400,800,1200,1600]],[['解码 tok/s（采样）','decode tok/s (sampled)'],'d',90,[0,30,60,90]]]);}
+
 function drawFilters(){
   const F=document.getElementById('filters');F.innerHTML='';
   Object.entries(LANES).forEach(([k,[name,col]])=>{const b=document.createElement('button');b.type='button';b.setAttribute('aria-pressed',on.has(k));
@@ -403,7 +475,7 @@ function setLang(l,remember){
   document.getElementById('lang-zh').setAttribute('aria-pressed',LANG==='zh');
   document.getElementById('lang-en').setAttribute('aria-pressed',LANG==='en');
   if(remember){try{localStorage.setItem('lang',LANG);}catch(e){}}
-  drawSpeed();drawModes();drawWin();drawFilters();drawSteps();
+  drawSpeed();drawModes();drawWin();drawPipe();drawOne();drawStd();drawFilters();drawSteps();
 }
 (function(){
   let l=window.PAGE_LANG||new URLSearchParams(location.search).get('lang');

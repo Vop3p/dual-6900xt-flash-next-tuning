@@ -1,0 +1,6 @@
+arm,cards,build,prompt_4k_tok_s,prompt_16k_tok_s,decode_short_tok_s,decode_4k_tok_s,decode_16k_tok_s,sanity
+patched,2,strata-027-9ca7fd21 (0.2.7 + #3381 #3382 #3073 #3095 + ggml + rocBLAS 5.6.0 table + prefill-pipe 3072),1024.1,1515.9,79.4,66.5,66.9,12/12
+release,2,rx6000 package 0.1.52 + upstream switches,828.5,1355.9,73.8,66.0,74.0,12/12
+patched,1,strata-027-9ca7fd21,1023.3,1231.7,49.0,44.9,49.1,12/12
+patched+KVA,1,strata-027-9ca7fd21 + STRATA_KVA=1,1026.1,1344.5,50.3,43.6,45.5,12/12
+release,1,rx6000 package 0.1.52 + upstream switches,858.7,1100.1,46.2,47.5,45.1,12/12

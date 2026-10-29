@@ -5,7 +5,7 @@
 
 Each image is index.html with only one section of <main> left, a fixed theme (data-theme) and a fixed language
 (window.PAGE_LANG; the page carries both languages). Output: docs/now-{en,zh}-{light,dark}.png and
-docs/speed-chart-en-{light,dark}.png and docs/speed-chart-{light,dark}.png (Chinese), docs/win1x-chart-{en,zh}-{light,dark}.png (2200 px wide, device scale 2.2); OUT=dir writes them elsewhere."""
+docs/speed-chart-en-{light,dark}.png and docs/speed-chart-{light,dark}.png (Chinese), docs/win1x-chart-, pipe-chart-, one-chart-{en,zh}-{light,dark}.png (2200 px wide, device scale 2.2); OUT=dir writes them elsewhere."""
 import json, os, re, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -15,7 +15,10 @@ SRC = open(os.path.join(ROOT, "index.html"), encoding="utf-8").read()
 # target -> (index of the <section> to keep, CSS width in px, extra CSS); the height is trimmed to the content afterwards
 TARGETS = {"now": (0, 1000, ".now-more{display:none!important}"),
            "speed-chart": (1, 1000, "section h2,section .panel+.foot,section p.foot{display:none!important}"),
-           "win1x-chart": (3, 1000, "section h2,section .panel+.foot,section p.foot,section .panel .foot{display:none!important}")}
+           "win1x-chart": (3, 1000, "section h2,section .panel+.foot,section p.foot,section .panel .foot{display:none!important}"),
+           "pipe-chart": (4, 1000, "section h2,section .panel .foot{display:none!important}"),
+           "one-chart": (5, 1000, "section h2,section .panel .foot{display:none!important}"),
+           "std-chart": (6, 1000, "section h2,section .panel .foot{display:none!important}")}
 
 def page(section, theme, lang, extra):
     html = SRC.replace('<html lang="zh-CN" data-lang="zh">', f'<html lang="{"en" if lang == "en" else "zh-CN"}" data-lang="{lang}" data-theme="{theme}">')
