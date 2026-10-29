@@ -18,18 +18,20 @@
 
 | 臂 | 读 prompt 4K | 读 prompt 16K | 解码 short / 4K / 16K |
 |---|---|---|---|
-| 补丁，两卡（生产） | 1,024 | 1,516 | 79.4 / 66.5 / 66.9 |
+| 补丁，两卡（生产 027f，含 #3821） | 1,021 | 1,585 | 76.1 / 72.4 / 73.2 |
+| 开箱默认（`strata launch`，0.1.52），两卡 | 462 | 644 | 61.7 / 54.4 / 56.7 |
 | 原版包 0.1.52 + 上游开关，两卡 | 829 | 1,356 | 73.8 / 66.0 / 74.0 |
 | 补丁，一卡 | 1,023 | 1,232 | 49.0 / 44.9 / 49.1 |
 | 补丁 + `STRATA_KVA=1`，一卡 | 1,026 | 1,345 | 50.3 / 43.6 / 45.5 |
 | 原版包 + 上游开关，一卡 | 859 | 1,100 | 46.2 / 47.5 / 45.1 |
+| 开箱默认，一卡 | 476 | 505 | 45.8 / 42.5 / 41.4 |
 
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="std-chart-zh-dark.png">
     <img alt="0.2.7 标准基准：原版包对补丁、一卡对两卡、加 KVA" src="std-chart-zh-light.png" width="100%">
   </picture>
 
-  补丁带来读 prompt 单卡 +19% / +12%、两卡 +24% / +12%；解码在协议的采样噪声内。原版包的 rocBLAS（5.4.0）和随附的 gfx1030 表（5.6.0）对不上，走默认内核，和 0.2.2 时一样（#3790）。默认轨（`strata launch` 的开箱配置）这次没跑成：已装的 0.1.47 引擎不会被 0.2.7 Terminal 自动升级，要手动 `strata update`；升级后 0.2.7 的 launch 在本机连不上运行时宿主（引擎本身能服务），原因未查。
+  补丁带来读 prompt 单卡 +19% / +12%、两卡 +24% / +12%；解码在协议的采样噪声内。原版包的 rocBLAS（5.4.0）和随附的 gfx1030 表（5.6.0）对不上，走默认内核，和 0.2.2 时一样（#3790）。开箱默认与 0.2.2 持平（#3790：479 / 507、464 / 645）。升级要注意两点：旧 Terminal 装的引擎要手动 `strata update` 才换；0.2.7 的 `--save-preset NAME` 把基准用的 profile 存成 `launch-NAME`。
 - **生产（10-23 13:27 起）**：`strata-023-b523b933` = Strata 上游 **0.2.3**（合并进 0.2.2 生产，无冲突）+ #2985 的流水 MTP（`STRATA_PIPED_MTP=2`，JacobSussan）+ 我们的 5 个补丁：开批槽时单路保留 `--pipeline-windows`（`STRATA_PW_WITH_BATCH=1`，[#3095](https://github.com/Niko1221/Strata/pull/3095)）、HIP 上接通 #2071 的 SIMT=2 打分（[#3073](https://github.com/Niko1221/Strata/pull/3073)）、`--batch` 下读 prompt 也用 CPU 分担（`STRATA_PREFILL_CPU_SHARE_BATCH=1`，[#3382](https://github.com/Niko1221/Strata/pull/3382)）、gfx103x 读 prompt 注意力内核（`STRATA_PROMPT_ATTN_RDNA2=1`，[#3381](https://github.com/Niko1221/Strata/pull/3381)）、rocBLAS 解的本机缓存；外加 `STRATA_PREFILL_STREAM_MIN=2048` 和自改的 llama.cpp ggml。配置钉 `--conversation-cache-mib 0`：0.2.3 默认按内存自动开会话缓存，本机单会话读 prompt 因此 4K 慢 3%、32K–128K 慢 1.4%（E533）。两路并发（`"parallel": 2`）、双卡分层、IQ3_S 专家、int8 KV、`--spec 3 --spec-min-p 0.7 --pipeline-windows 2`；10-21 起两卡降压 −81 mV @245 W（E522/E523：37 轮 0 次翻转；解码不随频率变，E507–E512）。回退槽 `strata-split-prev` = 0.2.2 合并版（`strata-022-34cd8534`）。10-20 以来引擎 0.1.45 → 0.2.1.3（E516/E517）→ 0.2.2（E527）→ 0.2.3（E533），每一步速度和 KL 都与上一版持平。
 - **现在的速度**（E533，E415 同款负载，生产配置去图片编码器，两轮）：prompt **1,008 / 1,800 / 2,171** tok/s（4K / 32K / 128K；10-20 生产的 E504 是 1,020 / 1,790 / 2,158，10-10 的 E415 是 985 / 1,792 / 2,046），单请求解码 **75 / 79 / 78**（E504：80 / 79 / 74）；两个请求同时跑合计 60–64 tok/s（E481），第二个请求首字 12 s → 0.5 s（E463–E470）。短 prompt：430 token 读 1.1 s（原来 1.7 s，E493）。同一台机器、同样设置下的上游 **0.2.0-beta** 原版（E503，社区报告 [#3426](https://github.com/Niko1221/Strata/pull/3426)）：自带套件 4K / 32K 979 / 1,662 tok/s，真实文本 119K 1,893，单请求解码 66——差距就是我们的补丁（每个都在上面的 PR 里用 0.2.0 重测过）。
 - **从 llama.cpp 到 Strata 的总账**（同一份 IQ3_S）：解码 26 → 约 80 tok/s（≈3×），32K–37K prompt 274 → 1,790（≈6.5×），128K 821（0.1.39）→ 2,158。其中换引擎占大头，之后我们的补丁和配置让 prompt 大约翻倍（37K 714 → 1,433 → 1,705；10-20 的 32K 1,790、128K 2,158），解码约 +40%（56–58 → 80）。
