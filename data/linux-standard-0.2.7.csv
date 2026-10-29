@@ -7,3 +7,4 @@ release,2,rx6000 package 0.1.52 + upstream switches,828.5,1355.9,73.8,66.0,74.0,
 patched,1,strata-027-9ca7fd21,1023.3,1231.7,49.0,44.9,49.1,12/12
 patched+KVA,1,strata-027-9ca7fd21 + STRATA_KVA=1,1026.1,1344.5,50.3,43.6,45.5,12/12
 release,1,rx6000 package 0.1.52 + upstream switches,858.7,1100.1,46.2,47.5,45.1,12/12
+patched + dense trim (E619),2,strata-027f-3177b96f + layer_split 27 + STRATA_STAGE_TRIM=1 (the patched row above used auto split = 24 without trim),1031.9,1605.8,80.4,79.0,71.9,12/12

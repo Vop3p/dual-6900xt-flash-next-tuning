@@ -13,7 +13,7 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 
 ## Where it stands
 
-- **Production (since 10-27 18:40 on 0.2.7, `--prefill-pipe 3072` since 10-29 05:06):** `strata-027-9ca7fd21` = Strata upstream **0.2.7** (engine 0.1.52; #2985's pipelined MTP is upstream now as #4121) merged into the local patch set - #3381 (RDNA2 prompt attention), #3382 (CPU share beside `--batch`), #3073 (SIMT=2 scorer), #3095 (pipeline windows beside batch slots) - plus the modified llama.cpp ggml and the rocBLAS 5.6.0 table; 0.2.6 (E587) and 0.2.7 (E596) were each flat against the build before. Benchmark load (E596): prompt **1,009 / 1,786** at 4K / 32K, decode 78-85. `--prefill-pipe 3072` then lifted 8K **+16%** and 12K **+8%** (E613), and upstream #3821's chunk floor (`STRATA_PREFILL_PIPE_FLOOR=4096` with `--prefill-pipe 1600`) another +3-8% at 7K-20K (E617, below); production is `strata-027f-3177b96f` since 10-29 07:1x.
+- **Production (since 10-27 18:40 on 0.2.7, `--prefill-pipe 3072` since 10-29 05:06):** `strata-027-9ca7fd21` = Strata upstream **0.2.7** (engine 0.1.52; #2985's pipelined MTP is upstream now as #4121) merged into the local patch set - #3381 (RDNA2 prompt attention), #3382 (CPU share beside `--batch`), #3073 (SIMT=2 scorer), #3095 (pipeline windows beside batch slots) - plus the modified llama.cpp ggml and the rocBLAS 5.6.0 table; 0.2.6 (E587) and 0.2.7 (E596) were each flat against the build before. Benchmark load (E596): prompt **1,009 / 1,786** at 4K / 32K, decode 78-85. `--prefill-pipe 3072` then lifted 8K **+16%** and 12K **+8%** (E613), and upstream #3821's chunk floor (`STRATA_PREFILL_PIPE_FLOOR=4096` with `--prefill-pipe 1600`) another +3-8% at 7K-20K (E617, below); production is `strata-027f-3177b96f` since 10-29 07:1x; since 10-29 13:01 its json also pins `layer_split: 27` with `STRATA_STAGE_TRIM=1` (each card keeps only its own layers' dense weights; 2K prompt +8%, decode +1-3%, E618/E619, below).
 - **Strata's standard benchmark on 0.2.7 (E616, 10-29, all 12/12, 0 stalls):**
 
 **Two cards (layer split)**
@@ -23,6 +23,9 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 | Setup defaults (`strata launch`, 0.1.52) | 462 | 644 | 61.7 / 54.4 / 56.7 |
 | Release package 0.1.52 + upstream switches | 829 | 1,356 | 73.8 / 66.0 / 74.0 |
 | Patched (production 027f, with #3821) | 1,021 | 1,585 | 76.1 / 72.4 / 73.2 |
+| + dense-weight trim, split 27 (production since 13:01, E619)* | 1,032 | 1,606 | 80.4 / 79.0 / 71.9 |
+
+\* The row above it ran with auto split, which picked 24 on this config; this one pins 27 and trims. Two changes at once, one run each: a sanity check, not an A/B (the A/B is in the trim section below).
 
 **One card**
 
@@ -84,6 +87,24 @@ One RX 6900 XT (GPU 1), the production 027 binary and switches, 131072 context, 
 - **`STRATA_SH_STREAM=1` is worth +5-7% decode on one card** (54 -> 50 tok/s without it, same direction at every length, prompt unchanged). It has been so since 0.1.40 (E335); upstream's AMD_HIP page has gfx1151 preferring it off, so A/B it on your card. On Windows it was better off (E535).
 - **`STRATA_KVA=1`** (0.2.7, approximates the last 12 layers' KV on cold prompts, exact 2,048-token tail): **+10% / +16% prompt at 16K / 32K**, decode -2 to -3.5%, the 32K needle (depths 10/50/90) 3/3. Nothing below 16K with the 8,192 chunk: the threshold is 4,096 and the first chunk is always exact. It applies to one card without batch slots only, so the two-card production cannot use it.
 - One card's prompt rate flattens at ~1,240 tok/s from 8K on (two cards: 1,794 at 32K); KVA skipping the last 12 layers for three quarters of the positions buys only 16%, so the one-card prompt wall is not mainly the card's compute.
+
+## Dense-weight trim on the layer split, and five other switches (0.2.7, 10-29, E618/E619)
+
+Tested from cobra91's upstream PRs (#4522, #4534, carried over from Hardin22's Strata-DualGPU) and bitaccesscomau's fork (#4283, the round-7 settings). Cold engine per arm, two interleaved pairs per switch, parallel 1, 262,144 context, no vision; placement and routing switches judged on real text (decode = median of 11 generations of 384 tokens, greedy).
+
+- **`STRATA_STAGE_TRIM=1` is in production since 10-29 13:01.** On a layer split each card keeps the dense weights of all 48 layers unless told otherwise; the trim drops the layers the card does not run, and the freed VRAM goes to its expert cache. Main already has it, but only with an explicit `--layer-split` (`auto` trims only the later card), so the production json pins `layer_split: 27`, the value auto picks there anyway. Expert cache 5,893 / 4,688 -> **6,750 / 5,677** slots (bench config; production config 5,320 / 3,275 -> 6,175 / 4,265).
+
+| Real text | trim 1 | trim 2 | off 2 | off 3 |
+|---|---|---|---|---|
+| decode median | 78.3 | 78.6 | 76.0 | 77.5 |
+| prompt 2K | 846 | 842 | 783 | 782 |
+| prompt 4K / 8K | 1,047 / 1,335 | 1,047 / 1,338 | 1,042 / 1,333 | 1,040 / 1,332 |
+| prompt 16K / 32K | 1,576 / 1,810 | 1,594 / 1,814 | 1,592 / 1,810 | 1,592 / 1,810 |
+| follow-up ~1.8K on a 16K conversation | 1,385 | 1,397 | 1,365 | 1,365 |
+
+  2K **+8%**, follow-ups +1.5-2%, decode +1.4-3%, 4K-32K flat. Far less than #4522's 5.2x on a 32 GB box, because here every expert already sits in RAM and the extra slots save PCIe copies, not SSD reads. Gate (E619): Strata's standard benchmark 12/12, 0 stalls, 4K / 16K 1,032 / 1,606. Data point upstream: #4522.
+- **The split point (with trim):** 24 / 25 / 26 / 27 / 28 / 29 decode 80.4 / 81.4 / 79.9 / 78.3-79.5 / 78.8 / 76.1, 32K read 1,792 / 1,798 / 1,805 / ~1,792 / 1,740 / 1,710. 25 against 27 re-run in two ABBA pairs: +0.6% / +1.4%, noise. **24-27 are flat; 28-29 cost 3-9%** on long reads and long-history decode. Auto picks 27 on the production config and 24 on the bench config (it prices free VRAM). Data point upstream: #4534.
+- **Not adopted (both pairs under 3% or opposite):** `--adapt-decay 0.5` (78.0 / 78.0 vs 79.6 / 78.1), `--adapt-every 2` (opposite directions), `STRATA_KV_PREFETCH=1` (128K / 224K read +0.5 / +1-1.5%, needle found), and upstream **#4283** `STRATA_PREFILL_ROUTED_STREAM=1`, which is **slower** here: 8K -4.2% / -2.7%, 16K -2%, 32K -1%, output identical (the link is rarely the wait on this box, E482). Data points: #4283 and the fork's PR #6.
 
 ## Where the time goes: stock against tuned (0.2.0-beta vs the 10-20 production, E505)
 
