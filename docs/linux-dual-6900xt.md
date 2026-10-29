@@ -16,15 +16,22 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 - **Production (since 10-27 18:40 on 0.2.7, `--prefill-pipe 3072` since 10-29 05:06):** `strata-027-9ca7fd21` = Strata upstream **0.2.7** (engine 0.1.52; #2985's pipelined MTP is upstream now as #4121) merged into the local patch set - #3381 (RDNA2 prompt attention), #3382 (CPU share beside `--batch`), #3073 (SIMT=2 scorer), #3095 (pipeline windows beside batch slots) - plus the modified llama.cpp ggml and the rocBLAS 5.6.0 table; 0.2.6 (E587) and 0.2.7 (E596) were each flat against the build before. Benchmark load (E596): prompt **1,009 / 1,786** at 4K / 32K, decode 78-85. `--prefill-pipe 3072` then lifted 8K **+16%** and 12K **+8%** (E613), and upstream #3821's chunk floor (`STRATA_PREFILL_PIPE_FLOOR=4096` with `--prefill-pipe 1600`) another +3-8% at 7K-20K (E617, below); production is `strata-027f-3177b96f` since 10-29 07:1x.
 - **Strata's standard benchmark on 0.2.7 (E616, 10-29, all 12/12, 0 stalls):**
 
+**Two cards (layer split)**
+
 | Arm | Prompt 4K | Prompt 16K | Decode short / 4K / 16K |
 |---|---|---|---|
-| Patched, two cards (production 027f, with #3821) | 1,021 | 1,585 | 76.1 / 72.4 / 73.2 |
-| Setup defaults (`strata launch`, 0.1.52), two cards | 462 | 644 | 61.7 / 54.4 / 56.7 |
-| Release package 0.1.52 + upstream switches, two cards | 829 | 1,356 | 73.8 / 66.0 / 74.0 |
-| Patched, one card | 1,023 | 1,232 | 49.0 / 44.9 / 49.1 |
-| Patched + `STRATA_KVA=1`, one card | 1,026 | 1,345 | 50.3 / 43.6 / 45.5 |
-| Release package + upstream switches, one card | 859 | 1,100 | 46.2 / 47.5 / 45.1 |
-| Setup defaults, one card | 476 | 505 | 45.8 / 42.5 / 41.4 |
+| Setup defaults (`strata launch`, 0.1.52) | 462 | 644 | 61.7 / 54.4 / 56.7 |
+| Release package 0.1.52 + upstream switches | 829 | 1,356 | 73.8 / 66.0 / 74.0 |
+| Patched (production 027f, with #3821) | 1,021 | 1,585 | 76.1 / 72.4 / 73.2 |
+
+**One card**
+
+| Arm | Prompt 4K | Prompt 16K | Decode short / 4K / 16K |
+|---|---|---|---|
+| Setup defaults | 476 | 505 | 45.8 / 42.5 / 41.4 |
+| Release package + upstream switches | 859 | 1,100 | 46.2 / 47.5 / 45.1 |
+| Patched | 1,023 | 1,232 | 49.0 / 44.9 / 49.1 |
+| Patched + `STRATA_KVA=1` | 1,026 | 1,345 | 50.3 / 43.6 / 45.5 |
 
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="std-chart-en-dark.png">
