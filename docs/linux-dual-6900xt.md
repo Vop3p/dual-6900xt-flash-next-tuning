@@ -6,10 +6,10 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="speed-chart-en-dark.png">
-  <img alt="Prompt and decode speed, step by step, llama.cpp 10-02 to Strata 0.2.3 + patches 10-23" src="speed-chart-en-light.png" width="100%">
+  <img alt="Prompt and decode speed, step by step, llama.cpp 10-02 to Strata 0.2.8 + GDN group / wide dequant 10-30" src="speed-chart-en-light.png" width="100%">
 </picture>
 
-*Prompt tok/s at 4K, 32K–37K and 128K (left axis) and decode tok/s (right axis) at each production state. Points come from different experiments under slightly different conditions (the 4K points of the first two steps are 5K prompts; the last two points are E504 and E533, the E415 load on the 10-20 and 10-23 productions; the notes under the chart on the interactive page list the rest); a dashed segment bridges a step where that metric was not measured.*
+*Prompt tok/s at 4K, 32K–37K and 128K (left axis) and decode tok/s (right axis) at each production state. Points come from different experiments under slightly different conditions (the 4K points of the first two steps are 5K prompts; from 10-20 the points are E504 / E533 / E587 / E596 / E620 / E623, the same load on each production, parallel 1, no encoder; the last two decode points, 84 / 86, are run-to-run swing at pipeline-windows 2 - real-text decode is 79-80 on every version; 0.2.9 is output-identical to 0.2.8 and ±0.3% (E631), so it has no point of its own; the notes under the chart on the interactive page list the rest); a dashed segment bridges a step where that metric was not measured.*
 
 ## Where it stands
 

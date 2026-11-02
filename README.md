@@ -21,7 +21,7 @@ Measured tuning of **Qwen3.8-Flash-Next (IQ3_S)** on AMD RX 6900 XT (RDNA2, gfx1
 
 ## More
 
-- [docs/timeline.md](docs/timeline.md) — every step from 09-21 to 10-24 with its measured effect (10-25 → 11-02 is in the Linux doc).
+- [docs/timeline.md](docs/timeline.md) — every step from 09-21 to 11-02 with its measured effect.
 - [docs/mechanisms.md](docs/mechanisms.md) — what limits speed on these cards, and the mistakes made on the way.
 - [data/](data/README.md) — the numbers behind every chart as CSV.
 - [bench/](bench/) — the A/B scripts (`run_ab.sh`, `benchmark.py`, `ab_compare.py`, `monitor_amd.py`) and raw results per experiment (`bench/results/eNNN/`).

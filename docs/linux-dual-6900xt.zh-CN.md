@@ -6,10 +6,10 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="speed-chart-dark.png">
-  <img alt="读 prompt 与解码速度逐步变化：llama.cpp 10-02 到 Strata 0.2.3 + 补丁 10-23" src="speed-chart-light.png" width="100%">
+  <img alt="读 prompt 与解码速度逐步变化：llama.cpp 10-02 到 Strata 0.2.8 + GDN 组 / 宽解压 10-30" src="speed-chart-light.png" width="100%">
 </picture>
 
-*各生产状态的读 prompt（4K、32K–37K、128K，左轴）和解码（右轴）tok/s。各点来自不同实验、条件不完全相同（前两步的 4K 点是 5K prompt；最后两点是 E504 和 E533，即 10-20 和 10-23 的生产跑 E415 同款负载；其余见交互页图下说明）；虚线段表示那一步没测这个指标。*
+*各生产状态的读 prompt（4K、32K–37K、128K，左轴）和解码（右轴）tok/s。各点来自不同实验、条件不完全相同（前两步的 4K 点是 5K prompt；10-20 起各点是 E504 / E533 / E587 / E596 / E620 / E623，各版生产配置跑同一负载，parallel 1，无图片编码器；最后两点的解码 84 / 86 是 pipeline-windows 2 下的跨运行波动，真实文本解码各版都是 79–80；0.2.9 与 0.2.8 逐字相同、±0.3%（E631），不单列一点；其余见交互页图下说明）；虚线段表示那一步没测这个指标。*
 
 ## 结论（先看这里）
 

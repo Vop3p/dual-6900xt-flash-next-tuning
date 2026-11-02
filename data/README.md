@@ -6,7 +6,7 @@ Text and data: CC BY-NC 4.0.
 
 | File | Rows | Columns | Chart / source |
 |---|---|---|---|
-| `linux-speed-steps.csv` | each production state of the two-card Linux box, llama.cpp 10-02 → Strata 0.2.3 + patches 10-23 | `step`, `date` (MM-DD, 2026), prompt tok/s at 4K, at 32K–37K, at 128K, decode tok/s | `docs/speed-chart-*`; conditions differ between points (see the note under the chart in `index.html`) |
+| `linux-speed-steps.csv` | each production state of the two-card Linux box, llama.cpp 10-02 → Strata 0.2.8 + GDN group / wide dequant 10-30 | `step`, `date` (MM-DD, 2026), prompt tok/s at 4K, at 32K–37K, at 128K, decode tok/s | `docs/speed-chart-*`; conditions differ between points (see the note under the chart in `index.html`) |
 | `linux-breakdown-prompt-e505.csv` | 4K / 32K / 128K × stock (0.2.0-beta) / tuned (10-20 production) | ms per 1,000 prompt tokens per phase, total, tok/s | `docs/breakdown-prompt-*`; phases are estimates from the engine's timing switches, totals measured (E505) |
 | `linux-breakdown-decode-e505.csv` | the same | ms per decoded token per phase, total, tok/s | `docs/breakdown-decode-*` (E505) |
 | `linux-modes-0.1.41-32k.csv` | stock / two switches / PRs / E387 config × one card / expert helper / layer split | prompt and decode tok/s at 32K | `docs/modes-chart-*` (E388 / E388a, Strata 0.1.41) |

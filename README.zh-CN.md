@@ -21,7 +21,7 @@
 
 ## 其他
 
-- [docs/timeline.zh-CN.md](docs/timeline.zh-CN.md)：09-21 到 10-24 的每一步和实测效果（10-25 → 11-02 写在 Linux 文档里）。
+- [docs/timeline.zh-CN.md](docs/timeline.zh-CN.md)：09-21 到 11-02 的每一步和实测效果。
 - [docs/mechanisms.zh-CN.md](docs/mechanisms.zh-CN.md)：这几张卡上速度卡在哪里，以及我在这上面犯过的错。
 - [data/](data/README.md)：每张图背后的数字（CSV）。
 - [bench/](bench/)：A/B 脚本（`run_ab.sh`、`benchmark.py`、`ab_compare.py`、`monitor_amd.py`），以及按实验编号存放的原始结果（`bench/results/eNNN/`）。
