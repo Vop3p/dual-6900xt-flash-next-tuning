@@ -15,13 +15,13 @@
 
 | 你的机器 | 结果 | 看这里 |
 |---|---|---|
-| **2× RX 6900 XT，Linux**（Ryzen 5 5600X、128 GB、各 PCIe 4.0 x8） | 读 prompt **1,009 / 1,347 / 1,786** tok/s（4K / 8K / 32K，0.2.7 + 补丁，10-29），解码 **78–85**；标准基准 4K / 16K 1,024 / 1,516，比原版包快 24% / 12%；相对 llama.cpp：解码约 3 倍、32K 读 prompt 约 6.5 倍 | [docs/linux-dual-6900xt.zh-CN.md](docs/linux-dual-6900xt.zh-CN.md) |
+| **2× RX 6900 XT，Linux**（Ryzen 5 5600X、128 GB、各 PCIe 4.0 x8） | 读 prompt **1,009 / 1,347 / 1,786** tok/s（4K / 8K / 32K，0.2.7 + 补丁，10-29），解码 **78–85**；标准基准现在 4K / 16K **1,136 / 1,793**（0.2.9 + 补丁 + 两个读 prompt 开关，11-02；0.2.7 原版包 829 / 1,356）；相对 llama.cpp：解码约 3 倍、32K 读 prompt 约 6.5 倍 | [docs/linux-dual-6900xt.zh-CN.md](docs/linux-dual-6900xt.zh-CN.md) |
 | **一张 RX 6000，Windows**（6800 / 6800 XT / 6900 XT / 6950 XT / 6700 XT） | 官方包只改设置：16K 读 prompt **479 → 1,076**，解码 **28 → 42**；一个 PowerShell 脚本装好 | [windows-rx6000/](windows-rx6000/README.md)（懒人包，英文）· [docs/windows-one-card.zh-CN.md](docs/windows-one-card.zh-CN.md)（怎么调出来的） |
 | **llama.cpp 跑稠密 Qwen3.8-27B**，双卡 | 32K 读 prompt 731，解码短上下文 62 / 32K 44；8 个 RDNA2 llama.cpp 补丁 | [docs/27b-llamacpp.zh-CN.md](docs/27b-llamacpp.zh-CN.md) · [patches/llama.cpp/](patches/llama.cpp/README.md) |
 
 ## 其他
 
-- [docs/timeline.zh-CN.md](docs/timeline.zh-CN.md)：09-21 到 10-24 的每一步和实测效果。
+- [docs/timeline.zh-CN.md](docs/timeline.zh-CN.md)：09-21 到 10-24 的每一步和实测效果（10-25 → 11-02 写在 Linux 文档里）。
 - [docs/mechanisms.zh-CN.md](docs/mechanisms.zh-CN.md)：这几张卡上速度卡在哪里，以及我在这上面犯过的错。
 - [data/](data/README.md)：每张图背后的数字（CSV）。
 - [bench/](bench/)：A/B 脚本（`run_ab.sh`、`benchmark.py`、`ab_compare.py`、`monitor_amd.py`），以及按实验编号存放的原始结果（`bench/results/eNNN/`）。
