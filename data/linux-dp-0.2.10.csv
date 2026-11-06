@@ -1,0 +1,3 @@
+config,date,experiments,prompt_16k_tok_s,prompt_32k_tok_s,prompt_64k_tok_s,prompt_128k_tok_s,decode_4k_tok_s,decode_32k_tok_s
+layer pipeline (0.2.10 + patches),11-06,E675/E676,1724,1905,2109,2197,88.3,81.3
+on-demand DP + --prefill 16384 (production since 11-06),11-06,E675/E676,1858,2094,2325,2425,88.0,81.7

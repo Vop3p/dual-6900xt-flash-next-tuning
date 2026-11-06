@@ -1,0 +1,689 @@
+From 9b0e19d45f30258448300e5a33cb9417eaad8e82 Mon Sep 17 00:00:00 2001
+From: xjc10 <69450118+xjc10@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 00:54:06 -0500
+Subject: [PATCH] DP prompt path on 2x RX 6900 XT: on-demand DP beside --batch
+ slots, staged foreign rows, drafter catch-up (all opt-in)
+
+- WeightTable::find: the DP fallback looks only at the other table's own rows (a name neither holds recursed until SIGSEGV)
+- STRATA_DP_BATCH=1: the DP start gate with --batch slots; the STRATA_PIPED_CONCURRENT read steps aside when the DP path takes the read
+- STRATA_DP_LAZY=1: the DP foreign sessions are laid out in the slots a DP read borrows (Prefill::set_dp_room), not held in VRAM
+- STRATA_DP_STAGE_W=N / STRATA_DP_STAGE_MIN=<bytes>: a ring of N per-layer slots the stage-trimmed peer's rows of a foreign layer are copied into (rows below MIN stay in place; 0 copies every row)
+- STRATA_DP_MTP_ALL=1: both paths' chunks reach the drafter in prompt order
+- STRATA_DP_STAGE_TIMING=1 / STRATA_DP_TRACE=1: diagnostics
+- STRATA_DP_MTP_ALL etc. measured in notes E663-E676
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/strata/core/weights.hpp    |   8 +
+ include/strata/prefill/prefill.hpp |  15 ++
+ src/core/weights.cpp               |   9 +-
+ src/prefill/prefill.cpp            | 315 +++++++++++++++++++++++++++++
+ src/program/generate.cpp           |  78 ++++++-
+ 5 files changed, 420 insertions(+), 5 deletions(-)
+
+diff --git a/include/strata/core/weights.hpp b/include/strata/core/weights.hpp
+index cf0d5b3f..6e926285 100644
+--- a/include/strata/core/weights.hpp
++++ b/include/strata/core/weights.hpp
+@@ -142,6 +142,13 @@ public:
+     /// DP prefill (STRATA_DP_PREFILL): while the other GPU's table is set, a row this table skipped (a stage-trimmed layer:
+     /// no data, no native or Q8 copy) is that table's row - device pointers the peer link reads.  nullptr clears it.
+     void set_dp_fallback(const WeightTable* other) const { dp_fallback_ = other; }
++    const WeightTable* dp_fallback() const { return dp_fallback_; }
++    /// [claude] STRATA_DP_STAGE_W (Prefill::DpWStage): rows of the other card's foreign layers copied into this card's
++    /// staging slots, found before the table's own rows and the fallback.  Only the thread reading this table's prompt
++    /// touches them (a DP read has no decode beside it).
++    void dp_stage_put(const std::string& name, const WeightRef& r) const { dp_staged_[name] = r; }
++    void dp_stage_drop(const std::string& name) const { dp_staged_.erase(name); }
++    void dp_stage_clear() const { dp_staged_.clear(); }
+     /// STRATA_HC_Q8: the hyper-connection projections (`blk.*.hc_{attn,ffn}_{down,up}.weight`) the loader SKIPPED
+     /// are read from the pack, quantized to int8 + one fp32 scale per 32 values, and uploaded to their own device
+     /// allocation (`q8_scale` set).  Returns the bytes uploaded in `bytes`.
+@@ -155,6 +162,7 @@ private:
+     friend class NativeDense;
+     std::map<std::string, WeightRef> table_;
+     mutable const WeightTable* dp_fallback_ = nullptr;
++    mutable std::map<std::string, WeightRef> dp_staged_;
+     LoadReport report_;
+     std::string pack_dir_;
+ };
+diff --git a/include/strata/prefill/prefill.hpp b/include/strata/prefill/prefill.hpp
+index 897b2209..f22dc4f5 100644
+--- a/include/strata/prefill/prefill.hpp
++++ b/include/strata/prefill/prefill.hpp
+@@ -307,6 +307,13 @@ public:
+     void set_dp(Prefill* peer, core::SessionState* foreign, int64_t own_lb, int64_t own_le, std::shared_ptr<DpLink> link,
+                 int index);
+     bool dp_ready() const { return dp_link_ != nullptr; }
++    /// [claude] STRATA_DP_LAZY=1: the foreign session lives in the prompt path's own layout (the slots it borrows), not in
++    /// a buffer of its own.  `set_dp_room` registers its bytes for the path whose session is `owner` (bytes_needed and
++    /// carve take them last); run_dp calls `prepare` with the room at the start of every DP read (the session is laid
++    /// out again there: what an earlier read left in it is never used).
++    static void set_dp_room(const core::SessionState* owner, uint64_t bytes);
++    bool dp_room_ready() const;   // [claude] STRATA_DP_LAZY: this layout holds the room (carve took it)
++    void set_dp_room_prepare(std::function<bool(void* room, std::string& err)> prepare) { dp_room_prepare_ = std::move(prepare); }
+     /// Read [pos0, pos0 + n) on `a` and `b` together in chunks of up to `chunk` tokens; the last chunk runs on `b` (the
+     /// drafter's GPU) and is at least `min_last` tokens when the prompt allows.  `b`'s on_chunk reports b's chunks.
+     static bool run_dp(Prefill& a, Prefill& b, const int64_t* tokens, int64_t n, int64_t pos0, int64_t chunk,
+@@ -368,6 +375,7 @@ private:
+     // DP: see set_dp
+     Prefill* dp_peer_ = nullptr;
+     core::SessionState* dp_foreign_ = nullptr;
++    std::function<bool(void*, std::string&)> dp_room_prepare_;   // [claude] STRATA_DP_LAZY (set_dp_room_prepare)
+     int64_t dp_own_lb_ = 0, dp_own_le_ = 0;
+     std::shared_ptr<DpLink> dp_link_;
+     int dp_index_ = 0;
+@@ -377,6 +385,13 @@ private:
+     bool dp_active_ = false;
+     bool dp_wait(int64_t l, int64_t k, std::string& err);
+     bool dp_publish(int64_t l, int64_t k, int64_t p0, int64_t T, std::string& err);
++    // [claude] STRATA_DP_STAGE_W=N (opt-in; a DP read beside a stage-trimmed peer): the peer's big dense rows of each
++    // foreign layer copied into N local VRAM slots a layer or two ahead, instead of read in place over the link
++    struct DpWStage;
++    std::shared_ptr<DpWStage> dpw_;
++    void dpw_begin();
++    bool dpw_layer(int64_t l, std::string& err);
++    void dpw_end();
+     std::vector<int> tap_layers_;
+     std::vector<int> tap_local_;                  ///< the tapped layers this stage runs (run)
+     int64_t tap_first_ = 0, tap_cap_ = 0;
+diff --git a/src/core/weights.cpp b/src/core/weights.cpp
+index 4ff0e5e5..d8eebc45 100644
+--- a/src/core/weights.cpp
++++ b/src/core/weights.cpp
+@@ -511,10 +511,17 @@ bool WeightTable::load(const std::string& pack_dir, void* arena_base, uint64_t a
+ }
+ 
+ const WeightRef* WeightTable::find(const std::string& name) const {
++    if (!dp_staged_.empty()) {   // [claude] STRATA_DP_STAGE_W: a staged copy of a foreign layer's row
++        const auto st = dp_staged_.find(name);
++        if (st != dp_staged_.end()) return &st->second;
++    }
+     const auto it = table_.find(name);
+     const WeightRef* r = it == table_.end() ? nullptr : &it->second;
+     if (dp_fallback_ != nullptr && (r == nullptr || (r->data == nullptr && r->native_data == nullptr && r->hc_q8 == nullptr))) {
+-        const WeightRef* o = dp_fallback_->find(name);
++        // the other table's own row only: both tables point at each other during a DP read, so a name neither holds
++        // would otherwise recurse until the stack overflows (SIGSEGV)
++        const auto ot = dp_fallback_->table_.find(name);
++        const WeightRef* o = ot == dp_fallback_->table_.end() ? nullptr : &ot->second;
+         if (o != nullptr && (o->data != nullptr || o->native_data != nullptr || o->hc_q8 != nullptr)) return o;
+     }
+     return r;
+diff --git a/src/prefill/prefill.cpp b/src/prefill/prefill.cpp
+index 3d3020d1..2085e619 100644
+--- a/src/prefill/prefill.cpp
++++ b/src/prefill/prefill.cpp
+@@ -24,6 +24,7 @@
+ #include "strata/core/layout.hpp"
+ #include "strata/kernels/cpu/expert.hpp"
+ #include "strata/kernels/native_qsa.hpp"
++#include "strata/kernels/native_mmvq.hpp"   // [claude] STRATA_DP_STAGE_W: native_mmvq_weight_bytes
+ #include "strata/kernels/cpu/native_expert.hpp"
+ #include "strata/kernels/cpu/pool.hpp"
+ #include "strata/kernels/native_qsa_indexer.hpp"
+@@ -1052,6 +1053,7 @@ struct PrefillWarmer {
+ };
+ 
+ struct Prefill::Impl {
++    void* dp_room = nullptr;   // [claude] STRATA_DP_LAZY: the DP foreign session's room in this layout (carve)
+     const core::WeightTable* wt = nullptr;
+     const core::ModelGeometry* g = nullptr;
+     core::SessionState* ss = nullptr;
+@@ -1917,6 +1919,15 @@ bool Prefill::init(const core::WeightTable& wt, const core::ModelGeometry& g, co
+ 
+ // Every device buffer of a chunk of T tokens, from the Alloc `alloc` (after the GEMM scratch and workspace): `init`
+ // once, and `relayout` for a request's own chunk.  The order is `bytes_needed`'s.
++// [claude] STRATA_DP_LAZY: the DP foreign session's bytes per prompt path (keyed by the path's session), taken last by
++// bytes_needed_impl and carve (Prefill::set_dp_room)
++namespace {
++std::map<const core::SessionState*, uint64_t>& dp_rooms() { static std::map<const core::SessionState*, uint64_t> m; return m; }
++uint64_t dp_room_of(const core::SessionState* ss) { const auto it = dp_rooms().find(ss); return it == dp_rooms().end() ? 0 : it->second; }
++}  // namespace
++void Prefill::set_dp_room(const core::SessionState* owner, uint64_t bytes) { dp_rooms()[owner] = bytes; }
++bool Prefill::dp_room_ready() const { return impl_ && impl_->dp_room != nullptr; }
++
+ bool Prefill::carve(size_t T, void* alloc) {
+     Impl& m = *impl_;
+     Alloc& o = *static_cast<Alloc*>(alloc);
+@@ -2061,6 +2072,10 @@ bool Prefill::carve(size_t T, void* alloc) {
+     m.ple_emb = o.take<float>(T * N, ok);
+     m.ple_norm = o.take<float>((size_t) strata::kernels::NG_HC_DIM, ok);
+     take_stage(o, ss, s, m.stage, ok);
++    {   // [claude] STRATA_DP_LAZY: the foreign session's room, last (bytes_needed_impl takes it last too)
++        const uint64_t room = dp_room_of(&ss);
++        m.dp_room = room > 0 ? (void*) o.take<uint8_t>((size_t) room, ok) : nullptr;
++    }
+     m.T = (int64_t) T;
+     m.group_cap = pf_group_scratch() && !m.fused_bufs ? group_cap_rows(T, m.g->n_expert) : 0;
+     if (m.group_cap > 0 || hcr) {   // activation evidence: once per layout (a chunk size), what the switches took
+@@ -2823,6 +2838,7 @@ uint64_t Prefill::bytes_needed_impl(const core::ModelGeometry& g, const core::Se
+     f((size_t) strata::kernels::NG_HC_DIM);
+     strata::kernels::KvHostPools stage;
+     take_stage(o, ss, s, stage, ok);
++    if (const uint64_t room = dp_room_of(&ss)) o.take<uint8_t>((size_t) room, ok);   // [claude] STRATA_DP_LAZY (carve's last take)
+     return o.used + (8u << 20);   // alignment slack
+ }
+ 
+@@ -3960,6 +3976,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+             core::progress_beat();   // the serve watchdog: a prompt chunk of 8192 tokens is still moving
+             if (l > LB) pf_step("reading the prompt (batched, step sync): the experts and the rest of layer", l - 1);
+             core::progress_at("reading the prompt (batched): layer", l, p0);   // #251: a stall names layer and chunk
++            if (dp && !dpw_layer(l, err)) return false;   // [claude] STRATA_DP_STAGE_W: the foreign layer's copy, the next ones issued
+             const core::LayerView v(*m.wt, l);
+             if (dp && dp_k > 0 && !dp_wait(l, dp_k, err)) return false;   // DP: chunk k-1's state of layer l
+             // STRATA_KVA: `kva_layer` means this layer's output has no consumer left for this chunk, so only its
+@@ -7905,19 +7922,263 @@ core::PleRun& dp_ple_of(core::SessionState& own, core::SessionState* foreign) {
+ }
+ }  // namespace
+ 
++// [claude] STRATA_DP_STAGE_W=N (opt-in, N >= 2 slots): DP beside a stage-trimmed peer reads each foreign layer's weights from the
++// other card.  Read in place (the fallback) every GEMM pulls them over the link and the BF16 products re-read them per tile: on
++// PCIe 4.0 x8 that loses (E662b).  Here a foreign layer's big rows (>= 256 KiB: the native projections and the BF16
++// hyper-connection / router / indexer matrices) are copied once into one of N local slots, on a copy stream of their own, up
++// to N-1 foreign layers ahead in run order (wrapping to the next chunk's first).  The layer's compute waits for its copy, and a
++// slot is overwritten only after the layer it held has been read (`used`, recorded on the compute stream when the next layer
++// starts).  The weights do not change during a read, so a layer still in a slot from an earlier chunk is not copied again.
++// The small rows (norms, gates) stay read in place.  The slots are allocated for one read and freed after it.
++struct Prefill::DpWStage {
++    struct Seg { const void* src; uint64_t off, bytes; };
++    struct Ref { std::string name; core::WeightRef r; int64_t data_off = -1, native_off = -1; };
++    struct Layer { std::vector<Seg> segs; std::vector<Ref> refs; uint64_t bytes = 0; };
++    std::vector<Layer> L;
++    std::vector<int64_t> order;   // the staged layers, in run order
++    bool planned = false, active = false;
++    int n = 0, dev = 0, peer_dev = -1;
++    uint64_t slot_bytes = 0;
++    uint8_t* base = nullptr;
++    std::vector<int64_t> held;    // the layer in each slot (-1: none)
++    std::vector<uint64_t> seq;    // when each slot was last filled or asked for
++    uint64_t next_seq = 1;
++    std::vector<cudaEvent_t> copied, used;
++    cudaStream_t cp = nullptr;
++    int prev_slot = -1;           // the slot of the layer last entered (its `used` is recorded at the next entry)
++    uint64_t copies = 0, hits = 0, bytes_copied = 0;
++    // [claude] STRATA_DP_STAGE_TIMING=1: per copy (on cp: before / after) and per wait of the compute stream (before / after)
++    struct Tm { cudaEvent_t a, b; uint64_t bytes; };
++    std::vector<Tm> tcopy, twait;
++};
++static bool dpw_timing_env() {
++    static const bool v = [] { const char* e = std::getenv("STRATA_DP_STAGE_TIMING"); return e != nullptr && e[0] == '1'; }();
++    return v;
++}
++static bool dpw_ev2(cudaEvent_t& a, cudaEvent_t& b) {
++    return cudaEventCreate(&a) == cudaSuccess && cudaEventCreate(&b) == cudaSuccess;
++}
++
++static int dpw_slots_env() {
++    static const int v = [] { const char* e = std::getenv("STRATA_DP_STAGE_W"); return e != nullptr ? std::max(0, std::atoi(e)) : 0; }();
++    return v;
++}
++
++void Prefill::dpw_begin() {
++    Impl& m = *impl_;
++    const int ns = dpw_slots_env();
++    if (ns < 2 || m.wt == nullptr || m.wt->dp_fallback() == nullptr || m.g == nullptr || dp_peer_ == nullptr) return;
++    if (!dpw_) dpw_ = std::make_shared<DpWStage>();
++    DpWStage& S = *dpw_;
++    const core::WeightTable& own = *m.wt;
++    const core::WeightTable& peer = *own.dp_fallback();
++    const int64_t nl = m.g->n_layers;
++    if (!S.planned) {
++        S.L.assign((size_t) nl, DpWStage::Layer{});
++        std::map<std::string, std::pair<int64_t, uint64_t>> skipped;   // [claude] STRATA_DP_STAGE_TIMING
++        void* scratch = nullptr;   // this table's native q8_1 scratch: a staged row must not point at the peer's
++        for (const auto& [nm, r] : own.all())
++            if (r.native_q8_1 != nullptr) { scratch = r.native_q8_1; break; }
++        // [claude] STRATA_DP_STAGE_MIN=<bytes> (default 256 KiB): rows below it stay on the peer (read in place); 0 stages every row
++        static const uint64_t kMin = [] { const char* e = std::getenv("STRATA_DP_STAGE_MIN"); return e != nullptr ? (uint64_t) std::max(0LL, std::atoll(e)) : (uint64_t) (256u << 10); }();
++        for (const auto& [nm, o] : peer.all()) {
++            if (nm.rfind("blk.", 0) != 0) continue;
++            const int64_t l = std::atoll(nm.c_str() + 4);
++            if (l < 0 || l >= nl) continue;
++            const auto it = own.all().find(nm);
++            if (it != own.all().end() && (it->second.data != nullptr || it->second.native_data != nullptr || it->second.hc_q8 != nullptr))
++                continue;   // this card's own row
++            const uint64_t nb = o.native_data != nullptr && o.native_type >= 0
++                                    ? strata::kernels::native_mmvq_weight_bytes(o.native_type, (int) o.ne0, (int) o.ne1) : 0;
++            const uint64_t cb = o.data != nullptr ? o.bytes : 0;
++            if (o.hc_q8 != nullptr || o.q8_scale != nullptr || ((nb == 0 || nb < kMin) && (cb == 0 || cb < kMin))) {   // read in place over the link
++                if (dpw_timing_env()) {   // [claude] STRATA_DP_STAGE_TIMING: what stays on the peer, by the row's name past blk.N.
++                    const size_t d2 = nm.find('.', 4);
++                    const std::string kind = (o.hc_q8 != nullptr ? "hc_q8:" : o.q8_scale != nullptr ? "q8_scale:" : "small:") +
++                                             (d2 == std::string::npos ? nm : nm.substr(d2 + 1));
++                    auto& e = skipped[kind]; e.first += 1; e.second += std::max(nb, cb);
++                }
++                continue;
++            }
++            DpWStage::Layer& Ly = S.L[(size_t) l];
++            DpWStage::Ref R{nm, o};
++            auto add = [&](const void* src, uint64_t b) -> int64_t {
++                const uint64_t off = Ly.bytes;
++                Ly.segs.push_back({src, off, b});
++                Ly.bytes = (off + b + 255) / 256 * 256;
++                return (int64_t) off;
++            };
++            if (cb > 0 && cb >= kMin) R.data_off = add(o.data, cb);
++            if (nb > 0 && nb >= kMin) { R.native_off = add(o.native_data, nb); R.r.native_q8_1 = scratch; }
++            Ly.refs.push_back(std::move(R));
++        }
++        uint64_t tot = 0;
++        for (int64_t l = 0; l < nl; ++l)
++            if (!S.L[(size_t) l].segs.empty()) {
++                S.order.push_back(l);
++                S.slot_bytes = std::max(S.slot_bytes, S.L[(size_t) l].bytes);
++                tot += S.L[(size_t) l].bytes;
++            }
++        for (const auto& [k, v] : skipped)   // [claude] STRATA_DP_STAGE_TIMING
++            std::fprintf(stderr, "strata prefill DP: CUDA%d reads in place: %s x%lld (%.2f MiB)\n", m.device, k.c_str(),
++                         (long long) v.first, v.second / 1048576.0);
++        S.planned = true;
++        std::fprintf(stderr, "strata prefill DP: CUDA%d stages %zu foreign layers' big rows (%.0f MiB in all, %.1f MiB a slot) "
++                             "in %d local slots (STRATA_DP_STAGE_W)\n", m.device, S.order.size(), tot / 1048576.0,
++                     S.slot_bytes / 1048576.0, ns);
++    }
++    if (S.order.empty()) return;
++    S.dev = m.device;
++    S.peer_dev = dp_peer_->impl_->device;
++    const core::OnDevice on(S.dev);
++    S.n = std::min<int>(ns, (int) S.order.size());
++    void* b = nullptr;
++    if (cudaMalloc(&b, (size_t) S.n * S.slot_bytes) != cudaSuccess) {
++        (void) cudaGetLastError();
++        static std::atomic<bool> said{false};
++        if (!said.exchange(true))
++            std::fprintf(stderr, "strata prefill DP: CUDA%d has no room for %d staging slots (%.0f MiB): the foreign layers are "
++                                 "read in place\n", S.dev, S.n, S.n * S.slot_bytes / 1048576.0);
++        return;
++    }
++    S.base = (uint8_t*) b;
++    if (S.cp == nullptr && cudaStreamCreateWithFlags(&S.cp, cudaStreamNonBlocking) != cudaSuccess) {
++        (void) cudaGetLastError();
++        cudaFree(b);
++        S.base = nullptr;
++        return;
++    }
++    while ((int) S.copied.size() < S.n) {
++        cudaEvent_t e1 = nullptr, e2 = nullptr;
++        cudaEventCreateWithFlags(&e1, cudaEventDisableTiming);
++        cudaEventCreateWithFlags(&e2, cudaEventDisableTiming);
++        S.copied.push_back(e1);
++        S.used.push_back(e2);
++    }
++    S.held.assign((size_t) S.n, -1);
++    S.seq.assign((size_t) S.n, 0);
++    S.next_seq = 1;
++    S.prev_slot = -1;
++    S.copies = S.hits = S.bytes_copied = 0;
++    for (int i = 0; i < S.n; ++i) cudaEventRecord(S.used[(size_t) i], m.cs);   // a fresh slot has no reader
++    S.active = true;
++}
++
++bool Prefill::dpw_layer(int64_t l, std::string& err) {
++    if (!dpw_ || !dpw_->active) return true;
++    DpWStage& S = *dpw_;
++    Impl& m = *impl_;
++    if (S.prev_slot >= 0) {   // the layer before: every read of its slot is on the stream now
++        cudaEventRecord(S.used[(size_t) S.prev_slot], m.cs);
++        S.prev_slot = -1;
++    }
++    const auto at = std::find(S.order.begin(), S.order.end(), l);
++    if (at == S.order.end()) return true;   // one of this card's own layers
++    const size_t pos = (size_t) (at - S.order.begin());
++    auto ensure = [&](int64_t x, int64_t keep) -> int {
++        for (int i = 0; i < S.n; ++i)
++            if (S.held[(size_t) i] == x) { ++S.hits; S.seq[(size_t) i] = S.next_seq++; return i; }
++        int v = -1;   // the oldest slot not holding `keep` (the layer about to run); an empty slot first
++        for (int i = 0; i < S.n; ++i)
++            if (S.held[(size_t) i] != keep && (v < 0 || S.seq[(size_t) i] < S.seq[(size_t) v])) v = i;
++        if (v < 0) return -1;
++        if (S.held[(size_t) v] >= 0)
++            for (const auto& R : S.L[(size_t) S.held[(size_t) v]].refs) m.wt->dp_stage_drop(R.name);
++        S.held[(size_t) v] = -1;
++        uint8_t* dst = S.base + (size_t) v * S.slot_bytes;
++        if (cudaStreamWaitEvent(S.cp, S.used[(size_t) v], 0) != cudaSuccess) return -1;
++        DpWStage::Tm tm{nullptr, nullptr, S.L[(size_t) x].bytes};
++        const bool timed = dpw_timing_env() && dpw_ev2(tm.a, tm.b);
++        if (timed) cudaEventRecord(tm.a, S.cp);
++        for (const auto& sg : S.L[(size_t) x].segs)
++            if (cudaMemcpyPeerAsync(dst + sg.off, S.dev, sg.src, S.peer_dev, sg.bytes, S.cp) != cudaSuccess) return -1;
++        if (timed) { cudaEventRecord(tm.b, S.cp); S.tcopy.push_back(tm); }
++        if (cudaEventRecord(S.copied[(size_t) v], S.cp) != cudaSuccess) return -1;
++        for (const auto& R : S.L[(size_t) x].refs) {
++            core::WeightRef r = R.r;
++            if (R.data_off >= 0) r.data = dst + R.data_off;
++            if (R.native_off >= 0) r.native_data = dst + R.native_off;
++            m.wt->dp_stage_put(R.name, r);
++        }
++        S.held[(size_t) v] = x;
++        S.seq[(size_t) v] = S.next_seq++;
++        ++S.copies;
++        S.bytes_copied += S.L[(size_t) x].bytes;
++        return v;
++    };
++    const int mine = ensure(l, INT64_MIN);   // (not -1: that is an empty slot's mark, and every slot would be kept)
++    bool ok = mine >= 0;
++    for (int j = 1; ok && j < S.n; ++j) {   // ahead: the next staged layers in run order
++        const int64_t x = S.order[(pos + (size_t) j) % S.order.size()];
++        if (x == l) break;
++        ok = ensure(x, l) >= 0;
++    }
++    DpWStage::Tm tw{nullptr, nullptr, 0};
++    const bool wtimed = ok && dpw_timing_env() && dpw_ev2(tw.a, tw.b);
++    if (wtimed) cudaEventRecord(tw.a, m.cs);
++    if (!ok || cudaStreamWaitEvent(m.cs, S.copied[(size_t) mine], 0) != cudaSuccess) {
++        err = std::string("prefill DP: staging layer ") + std::to_string(l) + "'s weights: " + cudaGetErrorString(cudaGetLastError());
++        return false;
++    }
++    if (wtimed) { cudaEventRecord(tw.b, m.cs); S.twait.push_back(tw); }
++    S.prev_slot = mine;
++    return true;
++}
++
++void Prefill::dpw_end() {
++    if (!dpw_ || !dpw_->active) return;
++    DpWStage& S = *dpw_;
++    Impl& m = *impl_;
++    const core::OnDevice on(S.dev);
++    (void) cudaStreamSynchronize(S.cp);
++    (void) cudaStreamSynchronize(m.cs);
++    m.wt->dp_stage_clear();
++    if (!S.tcopy.empty() || !S.twait.empty()) {   // [claude] STRATA_DP_STAGE_TIMING
++        double cms = 0, cmax = 0, wms = 0, wmax = 0; uint64_t cb = 0; int wn = 0;
++        for (auto& t : S.tcopy) { float x = 0; cudaEventElapsedTime(&x, t.a, t.b); cms += x; cmax = std::max<double>(cmax, x); cb += t.bytes; cudaEventDestroy(t.a); cudaEventDestroy(t.b); }
++        for (auto& t : S.twait) { float x = 0; cudaEventElapsedTime(&x, t.a, t.b); wms += x; wmax = std::max<double>(wmax, x); wn += x > 0.5f; cudaEventDestroy(t.a); cudaEventDestroy(t.b); }
++        std::fprintf(stderr, "strata prefill DP timing: CUDA%d %zu staging copies %.0f MiB in %.0f ms (%.2f GB/s, longest %.1f ms); "
++                             "the compute stream waited %.0f ms at %zu layer entries (%d over 0.5 ms, longest %.1f ms)\n",
++                     S.dev, S.tcopy.size(), cb / 1048576.0, cms, cms > 0 ? cb / (cms * 1e6) : 0.0, cmax, wms, S.twait.size(), wn, wmax);
++        S.tcopy.clear(); S.twait.clear();
++    }
++    cudaFree(S.base);
++    S.base = nullptr;
++    S.active = false;
++    S.prev_slot = -1;
++    static std::atomic<int> said{0};
++    if (said.fetch_add(1) < 6)
++        std::fprintf(stderr, "strata prefill DP: CUDA%d staged %llu foreign layer copies (%.0f MiB), %llu found in a slot\n", S.dev,
++                     (unsigned long long) S.copies, S.bytes_copied / 1048576.0, (unsigned long long) S.hits);
++}
++
++// [claude] STRATA_DP_STAGE_TIMING=1: per path, the host's wait in dp_wait for the peer's publish and the compute stream's wait
++// on the peer's event (cudaEvents around the cudaStreamWaitEvent); entries are made by run_dp before its threads start
++namespace {
++struct DpWaitStat { double host_ms = 0; int64_t n = 0; std::vector<std::pair<cudaEvent_t, cudaEvent_t>> gpu; };
++std::map<const void*, DpWaitStat>& dp_wait_stats() { static std::map<const void*, DpWaitStat> m; return m; }
++}  // namespace
++
+ bool Prefill::dp_wait(int64_t l, int64_t k, std::string& err) {
+     DpLink& L = *dp_link_;
+     const int peer = 1 - dp_index_;
++    const bool timed = dpw_timing_env() && dp_wait_stats().count(this) != 0;
++    const auto th = Clock::now();
+     {
+         std::unique_lock<std::mutex> lk(L.mu);
+         L.cv.wait(lk, [&] { return L.abort || L.pub[peer][(size_t) l] >= k - 1; });
+         if (L.abort) { err = "prefill DP: the other GPU's path stopped"; return false; }
+     }
++    std::pair<cudaEvent_t, cudaEvent_t> ev{nullptr, nullptr};
++    const bool gt = timed && dpw_ev2(ev.first, ev.second);
++    if (timed) { DpWaitStat& st = dp_wait_stats()[this]; st.host_ms += ms_since(th); ++st.n; }
++    if (gt) cudaEventRecord(ev.first, impl_->cs);
+     // the event was recorded for chunk k-1 (the peer records it again only after this path published chunk k)
+     if (cudaStreamWaitEvent(impl_->cs, L.ev[peer][(size_t) l], 0) != cudaSuccess) {
+         err = std::string("prefill DP: cross-device wait: ") + cudaGetErrorString(cudaGetLastError());
+         return false;
+     }
++    if (gt) { cudaEventRecord(ev.second, impl_->cs); dp_wait_stats()[this].gpu.push_back(ev); }
+     return true;
+ }
+ 
+@@ -7977,6 +8238,12 @@ bool Prefill::run_dp(Prefill& a, Prefill& b, const int64_t* tokens, int64_t n, i
+         err = "prefill DP: the two paths are not linked";
+         return false;
+     }
++    for (Prefill* X : {&a, &b}) {   // [claude] STRATA_DP_LAZY: the foreign sessions are laid out in this read's room
++        if (!X->dp_room_prepare_) continue;
++        if (X->impl_->dp_room == nullptr) { err = "prefill DP: the per-read session has no room in this layout"; return false; }
++        std::string pe;
++        if (!X->dp_room_prepare_(X->impl_->dp_room, pe)) { err = "prefill DP: the per-read session: " + pe; return false; }
++    }
+     const int64_t C = std::min({chunk, a.impl_->T, b.impl_->T});   // the current layouts (relayout may be < T_max)
+     if (pos0 % strata::kernels::qsa_real_shapes().idx_block != 0) {
+         // a continuation from the middle of a K/V block: the owner may hold that block resident (decode's map) and
+@@ -8030,6 +8297,7 @@ bool Prefill::run_dp(Prefill& a, Prefill& b, const int64_t* tokens, int64_t n, i
+         X.dp_active_ = true;
+         if (xm.wt != nullptr && P[1 - i]->impl_->wt != nullptr && xm.wt != P[1 - i]->impl_->wt)
+             xm.wt->set_dp_fallback(P[1 - i]->impl_->wt);   // a trimmed stage: the other card's rows of its foreign layers
++        X.dpw_begin();   // [claude] STRATA_DP_STAGE_W (no-op without it)
+     }
+     {
+         std::lock_guard<std::mutex> lk(a.dp_link_->mu);
+@@ -8074,6 +8342,7 @@ bool Prefill::run_dp(Prefill& a, Prefill& b, const int64_t* tokens, int64_t n, i
+                 P[j]->impl_->host_res = sv[j].res; P[j]->stage_lb_ = sv[j].lb; P[j]->stage_le_ = sv[j].le;
+                 P[j]->next_ = sv[j].next; P[j]->on_stage_chunk = std::move(sv[j].osc); P[j]->stop_at_chunk = std::move(sv[j].sac);
+                 P[j]->force_chunk_ = 0; P[j]->dp_active_ = false;
++                P[j]->dpw_end();
+                 if (P[j]->impl_->wt != nullptr) P[j]->impl_->wt->set_dp_fallback(nullptr);
+             }
+             return false;
+@@ -8084,6 +8353,38 @@ bool Prefill::run_dp(Prefill& a, Prefill& b, const int64_t* tokens, int64_t n, i
+         P[i]->impl_->ss->ple_prev[0] = prev0[0]; P[i]->impl_->ss->ple_prev[1] = prev0[1];
+         if (P[i]->dp_foreign_) { P[i]->dp_foreign_->ple_prev[0] = prev0[0]; P[i]->dp_foreign_->ple_prev[1] = prev0[1]; }
+     }
++    // [claude] STRATA_DP_MTP_ALL=1: a's chunks reach the drafter too (b's on_chunk, which only b's chunks reached), in
++    // prompt order: each path's chunk waits its turn, so the draft layer's cells are built as the layer pipeline builds
++    // them.  The rows of a's chunks are read from a's device (the two cards map each other's memory for DP).
++    static const bool dp_mtp_all = [] { const char* v = std::getenv("STRATA_DP_MTP_ALL"); return v != nullptr && v[0] == '1'; }();
++    std::function<bool(const float*, int64_t, int64_t, std::string&)> b_chunk_saved;
++    const bool mtp_all = dp_mtp_all && b.on_chunk && !a.on_chunk;
++    if (mtp_all) {
++        struct Order { std::mutex mu; std::condition_variable cv; int64_t next = 0; };
++        auto ord = std::make_shared<Order>();
++        ord->next = pos0;
++        b_chunk_saved = b.on_chunk;
++        auto orig = b.on_chunk;
++        std::shared_ptr<DpLink> link = a.dp_link_;
++        const int drafter_dev = b.impl_->device;
++        auto wrap = [ord, orig, link, drafter_dev](const float* R, int64_t T, int64_t p0, std::string& e) -> bool {
++            std::unique_lock<std::mutex> lk(ord->mu);
++            while (ord->next != p0) {
++                ord->cv.wait_for(lk, std::chrono::milliseconds(50));
++                bool ab;
++                { std::lock_guard<std::mutex> lk2(link->mu); ab = link->abort; }
++                if (ab) { e = "prefill DP: the other path stopped (the drafter's chunks)"; return false; }
++            }
++            const core::OnDevice on(drafter_dev);
++            const bool ok = orig(R, T, p0, e);
++            ord->next = p0 + T;
++            ord->cv.notify_all();
++            return ok;
++        };
++        a.on_chunk = wrap;
++        b.on_chunk = wrap;
++    }
++    if (dpw_timing_env()) for (Prefill* X : {&a, &b}) dp_wait_stats()[X] = DpWaitStat{};   // [claude] STRATA_DP_STAGE_TIMING
+     std::string err_a;
+     std::future<bool> fa = std::async(std::launch::async, [&] {
+         strata::aux_cpus::pin_current_thread();
+@@ -8099,6 +8400,19 @@ bool Prefill::run_dp(Prefill& a, Prefill& b, const int64_t* tokens, int64_t n, i
+         a.dp_link_->cv.notify_all();
+     }
+     const bool ok_a = fa.get();
++    if (mtp_all) { a.on_chunk = nullptr; b.on_chunk = std::move(b_chunk_saved); }   // [claude] STRATA_DP_MTP_ALL
++    if (dpw_timing_env())   // [claude] STRATA_DP_STAGE_TIMING: what each path waited for the other one
++        for (Prefill* X : {&a, &b}) {
++            const core::OnDevice on(X->impl_->device);
++            (void) cudaStreamSynchronize(X->impl_->cs);
++            DpWaitStat& st = dp_wait_stats()[X];
++            double gms = 0, gmax = 0;
++            for (auto& e : st.gpu) { float x = 0; cudaEventElapsedTime(&x, e.first, e.second); gms += x; gmax = std::max<double>(gmax, x); cudaEventDestroy(e.first); cudaEventDestroy(e.second); }
++            std::fprintf(stderr, "strata prefill DP timing: CUDA%d dp_wait %lld times: the host waited %.0f ms for the other path's publish, "
++                                 "the compute stream %.0f ms on its events (longest %.1f ms)\n", X->impl_->device, (long long) st.n,
++                         st.host_ms, gms, gmax);
++            dp_wait_stats().erase(X);
++        }
+     for (int i = 0; i < 2; ++i) {   // both paths' streams: every hand-off has landed before decode reads the owners'
+         Prefill& X = *P[i];
+         const core::OnDevice on(X.impl_->device);
+@@ -8109,6 +8423,7 @@ bool Prefill::run_dp(Prefill& a, Prefill& b, const int64_t* tokens, int64_t n, i
+         X.next_ = sv[i].next;
+         X.on_stage_chunk = std::move(sv[i].osc);
+         X.stop_at_chunk = std::move(sv[i].sac);
++        X.dpw_end();   // [claude] STRATA_DP_STAGE_W
+         X.dp_active_ = false;
+         if (X.impl_->wt != nullptr) X.impl_->wt->set_dp_fallback(nullptr);
+     }
+diff --git a/src/program/generate.cpp b/src/program/generate.cpp
+index c3ec8ad1..ae40e8d8 100644
+--- a/src/program/generate.cpp
++++ b/src/program/generate.cpp
+@@ -6470,13 +6470,23 @@ int main(int argc, char** argv) {
+     // so a foreign session pins no copy of its own.  The foreign session of the stage holds layer 1, so it gets its own
+     // PLE run (the stage's copy of the weights, its own buffers).
+     strata::core::SessionState dp_ss[2];
++    // [claude] STRATA_DP_LAZY=1: the foreign sessions are laid out at every DP read in a room the prompt paths borrow
++    // with their own buffers (Prefill::set_dp_room), not held in VRAM of their own - the expert cache keeps those bytes
++    uint64_t dp_room_bytes[2] = {0, 0};
++    void* dp_buf[2] = {nullptr, nullptr};
++    static const bool dp_lazy = [] { const char* v = std::getenv("STRATA_DP_LAZY"); return v != nullptr && v[0] == '1'; }();
+     bool dp_on = false;
+     bool dp_needs_map = false;   // DP reads the other card's memory in place: on only where the link maps it both ways
+     {
+         const char* ev = std::getenv("STRATA_DP_PREFILL");
+         const char* kd = std::getenv("STRATA_KV_HOST_DMA");
+         const bool asked = ev != nullptr && ev[0] == '1';
+-        bool ok = asked && multi_gpu && stages.size() == 1 && o.batch == 0 && o.peer_device < 0 &&
++        // [claude] STRATA_DP_BATCH=1 (opt-in): with --batch slots too.  A slot's prompt is read by the single-request GEN
++        // path into the main sessions and then copied into the slot, and the read takes the DP path only while no slot
++        // decodes (run: `dp_on && !batch_on()`), so a long prompt that arrives alone is read on both GPUs.
++        const char* dpb = std::getenv("STRATA_DP_BATCH");
++        const bool dp_batch = dpb != nullptr && dpb[0] == '1';
++        bool ok = asked && multi_gpu && stages.size() == 1 && (o.batch == 0 || dp_batch) && o.peer_device < 0 &&
+                   kd != nullptr && kd[0] == '1' && g.n_qsa_layers() > 0 && ss.qsa_states[ss.qsa_primary()].kv_mode == 1 &&
+                   stages[0]->ss.qsa_states[stages[0]->ss.qsa_primary()].kv_mode == 1;
+         if (asked && !ok)
+@@ -6519,7 +6529,8 @@ int main(int argc, char** argv) {
+             const int64_t lo = i == 0 ? split_at[0] : 0, hi = i == 0 ? g.n_layers : split_at[0];
+             const strata::core::OnDevice on(dev);
+             void* buf = nullptr;
+-            if (cudaMalloc(&buf, strata::core::session_bytes(g, o.max_context, K, lo, hi)) != cudaSuccess ||
++            dp_room_bytes[i] = strata::core::session_bytes(g, o.max_context, K, lo, hi);
++            if (cudaMalloc(&buf, dp_room_bytes[i]) != cudaSuccess ||
+                 strata::core::session_init(g, o.max_context, K, buf, dp_ss[i], lo, hi, /*kv_host=*/false) == 0) {
+                 std::fprintf(stderr, "strata generate: DP prompt path: CUDA%d's session for layers [%lld, %lld) failed; "
+                                      "DP off\n", dev, (long long) lo, (long long) hi);
+@@ -6531,6 +6542,7 @@ int main(int argc, char** argv) {
+             for (int64_t q = dp_ss[i].qsa_ord0; q < dp_ss[i].qsa_ord0 + dp_ss[i].qsa_alloc; ++q)
+                 dp_ss[i].qsa_states[q].host = owner.qsa_states[q].host;
+             strata::core::session_zero(dp_ss[i], g, nullptr, i == 0 ? main_cs : st0.stream);
++            dp_buf[i] = buf;
+         }
+         if (ok && ss.ple.ready()) {   // the stage's foreign session holds layer 1: its own PLE run
+             GpuStage& st0 = *stages[0];
+@@ -6576,6 +6588,21 @@ int main(int argc, char** argv) {
+             }
+         }
+         dp_on = ok;
++        if (dp_on && dp_lazy) {   // the startup layout set up the PLE run's fields; its buffers go back to the cache
++            for (int i = 0; i < 2; ++i) {
++                const strata::core::OnDevice on(i == 0 ? 0 : stages[0]->dev);
++                cudaDeviceSynchronize();
++                cudaFree(dp_buf[i]);
++                dp_buf[i] = nullptr;
++            }
++            // (the rooms are registered per read, by lend, for a read the DP path takes: the others borrow nothing more)
++            std::fprintf(stderr, "strata generate: STRATA_DP_LAZY=1: the DP foreign sessions (%.2f + %.2f GiB) are laid out "
++                                 "in the prompt paths' borrowed slots at each DP read (only a read the DP path takes borrows them), not held in VRAM\n",
++                         (double) dp_room_bytes[0] / 1073741824.0, (double) dp_room_bytes[1] / 1073741824.0);
++        }
++        if (dp_on && o.batch != 0)
++            std::fprintf(stderr, "strata generate: STRATA_DP_BATCH=1: the DP prompt path with %d --batch slots (a prompt "
++                                 "read while no slot decodes)\n", (int) o.batch);
+         if (dp_on)
+             std::fprintf(stderr, "strata generate: DP prompt path on: CUDA0 also holds layers [%lld, %lld), CUDA%d layers "
+                                  "[0, %lld) (prompts of STRATA_DP_MIN tokens and more read both GPUs on alternating chunks); "
+@@ -10908,6 +10935,32 @@ int main(int argc, char** argv) {
+             } else {
+                 sp.set_dp(&stages[0]->sp, &dp_ss[0], 0, split_at[0], link, 0);
+                 stages[0]->sp.set_dp(&sp, &dp_ss[1], split_at[0], g.n_layers, link, 1);
++                if (dp_lazy)   // [claude] STRATA_DP_LAZY: each read lays the foreign session out in its room again
++                    for (int i = 0; i < 2; ++i) {
++                        strata::prefill::Prefill& path = i == 0 ? sp : stages[0]->sp;
++                        path.set_dp_room_prepare([&, i](void* room, std::string& pe) -> bool {
++                            GpuStage& st0 = *stages[0];
++                            const int dev = i == 0 ? 0 : st0.dev;
++                            const int64_t lo = i == 0 ? split_at[0] : 0, hi = i == 0 ? g.n_layers : split_at[0];
++                            const strata::core::OnDevice on(dev);
++                            const strata::core::PleRun keep = dp_ss[i].ple;   // the stage's own PLE run (set up at start)
++                            if (strata::core::session_init(g, o.max_context, K, room, dp_ss[i], lo, hi, /*kv_host=*/false) == 0) {
++                                pe = "session_init failed";
++                                return false;
++                            }
++                            strata::core::SessionState& owner = i == 0 ? st0.ss : ss;
++                            for (int64_t q = dp_ss[i].qsa_ord0; q < dp_ss[i].qsa_ord0 + dp_ss[i].qsa_alloc; ++q)
++                                dp_ss[i].qsa_states[q].host = owner.qsa_states[q].host;
++                            if (keep.hist != nullptr) {
++                                dp_ss[i].ple = keep;
++                                dp_ss[i].ple.hist = dp_ss[i].ple_hist;
++                            }
++                            cudaStream_t zs = (cudaStream_t) (i == 0 ? main_cs : st0.stream);
++                            strata::core::session_zero(dp_ss[i], g, nullptr, zs);
++                            if (cudaStreamSynchronize(zs) != cudaSuccess) { pe = cudaGetErrorString(cudaGetLastError()); return false; }
++                            return true;
++                        });
++                    }
+                 std::fprintf(stderr, "strata serve: DP prompt path linked (chunk up to %lld tokens)\n",
+                              (long long) o.prefill_chunk);
+             }
+@@ -16543,6 +16596,14 @@ int main(int argc, char** argv) {
+             auto lend = [&](int64_t tokens, std::string& e, int64_t exact) -> bool {
+                 seg_lend = 0;
+                 if (pf_parts.empty()) return true;                     // its own buffers: nothing to lend
++                // [claude] STRATA_DP_LAZY: a read the DP path will take borrows its foreign sessions' rooms with its buffers;
++                // every other read borrows what it did before
++                bool dp_room_want = false;
++                if (dp_on && dp_lazy) {
++                    dp_room_want = !batch_on() && dp_takes(tokens, o.prefill_chunk);
++                    strata::prefill::Prefill::set_dp_room(&ss, dp_room_want ? dp_room_bytes[0] : 0);
++                    strata::prefill::Prefill::set_dp_room(&stages[0]->ss, dp_room_want ? dp_room_bytes[1] : 0);
++                }
+                 const auto t_ln = Clock::now();
+                 // what this segment needs, capped by the configured chunk: a request lends only what its own
+                 // prompt needs, so a large chunk costs a short prompt nothing
+@@ -16561,7 +16622,7 @@ int main(int argc, char** argv) {
+                 for (PfPart& p : pf_parts) {
+                     if (p.first < 0) continue;
+                     if (!p.lent.empty()) {
+-                        if (want <= p.lent_chunk) continue;            // its current loan already covers this
++                        if (want <= p.lent_chunk && (!dp_room_want || p.sp->dp_room_ready())) continue;   // its current loan already covers this
+                         // ONLY this participant's loan goes back: `refill` would return the other participants'
+                         // loans too, and their buffers are still laid out in their caches - marking those slots
+                         // resident again would hand the next window a prompt buffer in place of an expert
+@@ -16766,6 +16827,12 @@ int main(int argc, char** argv) {
+                 };
+                 bool conc_read = false;   // run_conc: the slots decode beside the read, so the share stays off for all of it
+                 auto run = [&](int64_t q, int64_t r) -> bool {
++                    // [claude] STRATA_DP_TRACE=1: why a read did or did not take the DP path
++                    static const bool dp_trace = [] { const char* v = std::getenv("STRATA_DP_TRACE"); return v != nullptr && v[0] == '1'; }();
++                    if (dp_on && dp_trace)
++                        std::fprintf(stderr, "strata serve: DP trace: read [%lld, %lld) head %lld batch_on %d dp_takes %d\n",
++                                     (long long) q, (long long) r, (long long) dp_head(q), (int) batch_on(),
++                                     (int) dp_takes(r - q - dp_head(q), o.prefill_chunk));
+                     if (dp_on && !batch_on() && dp_takes(r - q - dp_head(q), o.prefill_chunk)) {
+                         // DP prompt path: both GPUs on alternating chunks while no slot decodes; a head to the next K/V
+                         // block boundary first (the pipeline), and the pipeline for a prompt the plan cannot take.
+@@ -16956,7 +17023,10 @@ int main(int argc, char** argv) {
+                     const char* v = std::getenv("STRATA_PIPED_CONCURRENT_MIN");
+                     return v != nullptr ? (int64_t) std::max(0LL, std::atoll(v)) : (int64_t) 0;
+                 }();
+-                if (piped && pr_conc && req_imgs.empty() && (b0 - a0) >= pr_conc_min) {   // (with no slot decoding it only watches for a BYIELD)
++                // [claude] STRATA_DP_BATCH: a read the DP prompt path takes (no slot decodes) goes to run(), which reads it
++                // on both GPUs; the concurrent read would call the prompt path directly and read it on the layer pipeline
++                const bool dp_read = dp_on && !batch_on() && dp_takes(b0 - a0 - dp_head(a0), o.prefill_chunk);
++                if (piped && pr_conc && req_imgs.empty() && (b0 - a0) >= pr_conc_min && !dp_read) {   // (with no slot decoding it only watches for a BYIELD)
+                     // the drafter's prompt pass captures its graphs and grows its records at first use, and the
+                     // prompt path's pinned upload slots grow at their first larger upload: done here, with nothing in
+                     // flight (on the reader's thread a capture, an allocation or a free takes the driver's lock and
+-- 
+2.53.0
+

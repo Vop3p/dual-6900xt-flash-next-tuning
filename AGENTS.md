@@ -6,7 +6,7 @@ this file is the short, actionable part. Numbers below are measurements from the
 ## Hardware and software this applies to
 
 - **Linux box:** 2x AMD RX 6900 XT 16 GB (gfx1030, PCIe 4.0 x8 each), Ryzen 5 5600X, 128 GB DDR4-3200, Ubuntu, ROCm 10.0,
-  Strata (engine 0.2.3 + patches as of 2026-10-23). Model: Qwen3.8-Flash-Next GSQ-RCO IQ3_S (two GGUF shards + Strata pack).
+  Strata (0.2.10 + patches + on-demand DP as of 2026-11-06). Model: Qwen3.8-Flash-Next GSQ-RCO IQ3_S (two GGUF shards + Strata pack).
 - **Windows PC:** one RX 6900 XT 16 GB, i9-10900K, 64 GB, Windows 11, Strata Terminal 0.2.3.1 with the official
   `windows-x86_64-hip-rdna2` engine package 0.1.48.
 - Other RDNA2 cards (6800 / 6800 XT / 6950 XT = gfx1030, 6700 XT = gfx1031) were **not measured**; expect the same
@@ -23,33 +23,41 @@ a fixed page file about the size of RAM, the model on local NVMe.
 
 ## Reproduce: two cards on Linux (the production configuration)
 
+Production since 2026-11-06: Strata upstream 0.2.10 + our patches + upstream PR #5002's DP prompt read + `patches/strata/`.
 Engine arguments of the production slot (paths replaced by `<…>`):
 
 ```
 --pack <iq3_s> --native <...IQ3_S-00001-of-00002.gguf> --ple-gguf <...IQ3_S-00002-of-00002.gguf>
---expert-profile <expert-profile.bin> --expert-cache auto --prefill auto --spec 3 --spec-min-p 0.7 --mtp <rt>
+--expert-profile <expert-profile.bin> --expert-cache auto --prefill 16384 --spec 3 --spec-min-p 0.6 --mtp <rt>
 --max-context 262144 --kv int8 --kv-resident 32768 --ple-io ram --vision --vram-reserve-mib 700
---pipeline-windows 2 --batch-mtp --conversation-cache-mib 0
+--pipeline-windows 2 --batch-mtp --conversation-cache-mib 0 --prefill-pipe 1600
 ```
 
-Run config: `"backend": "hip"`, `"gpu": [1, 0]`, `"layer_split": "auto"`, `"parallel": 2`, sampling temperature 0 and
-presence penalty 0 (the pipelined decode needs greedy sampling; a model card's presence penalty silently turns it off - E528, logged as "decodes serially"; not written up in docs/).
+Run config: `"backend": "hip"`, `"gpu": [1, 0]`, `"layer_split": 27`, `"parallel": 2`, sampling temperature 0 and
+presence penalty 0 (the pipelined decode needs greedy sampling; a model card's presence penalty silently turns it off - E528, logged as "decodes serially").
 
-Environment: `STRATA_HIP_PROMPT_F16=1 STRATA_HIP_ADAPT_KERNEL_COPY=1 STRATA_HC_PERSIST=1 STRATA_IO_THREADS=128
-STRATA_PIPED_CONCURRENT=1 STRATA_PREFILL_CPU_SHARE=auto STRATA_PREFILL_STREAM_MIN=2048 STRATA_SH_STREAM=1
-STRATA_SPLIT_MTP_BATCH=0 STRATA_ROCBLAS_TUNING=<dir with the gfx1030 table>`, plus switches that **only exist with
-patches that were not merged upstream as of 2026-10-24**: `STRATA_PIPED_MTP=2` (#2985), `STRATA_PW_WITH_BATCH=1`
-(#3095), `STRATA_SELECT_SIMT=2` on HIP (#3073), `STRATA_PREFILL_CPU_SHARE_BATCH=1` (#3382), `STRATA_PROMPT_ATTN_RDNA2=1`
-(#3381). On a stock build these are ignored silently; confirm each from the engine log.
+Environment (beyond the earlier set `STRATA_HIP_PROMPT_F16=1 STRATA_HIP_ADAPT_KERNEL_COPY=1 STRATA_HC_PERSIST=1 STRATA_IO_THREADS=128
+STRATA_PIPED_CONCURRENT=1 STRATA_PREFILL_CPU_SHARE=auto STRATA_PREFILL_STREAM_MIN=2048 STRATA_SH_STREAM=1 STRATA_SPLIT_MTP_BATCH=0
+STRATA_PIPED_MTP=2 STRATA_SELECT_SIMT=2 STRATA_PREFILL_CPU_SHARE_BATCH=1 STRATA_ROCBLAS_TUNING=<dir>`):
+`STRATA_STAGE_TRIM=1 STRATA_PREFILL_PIPE_FLOOR=4096`, the GDN group `STRATA_GDN_HEAD=1 STRATA_GDN_PP=2 STRATA_GDN_CONVL2=1 STRATA_GDN_NOY=1`,
+`STRATA_DEQUANT_WIDE=1`, the slot copy `STRATA_SLOT_COPY_DIRECT=1 STRATA_SLOT_COPY_BATCHSYNC=1 STRATA_SLOT_CKPT_MOVE=1`, `STRATA_SIDE_MIXER=2`,
+and the DP read `STRATA_DP_PREFILL=1 STRATA_KV_HOST_DMA=1 STRATA_DP_MIN=12288 STRATA_DP_PEER_RES=0` (PR #5002 + its `dp-followups`) plus the switches
+that only exist with `patches/strata/`: `STRATA_DP_BATCH=1 STRATA_DP_LAZY=1 STRATA_DP_STAGE_W=3 STRATA_DP_STAGE_MIN=0 STRATA_DP_MTP_ALL=1`. Local patches still
+not upstream: `STRATA_PW_WITH_BATCH=1` (#3095), `STRATA_PROMPT_ATTN_RDNA2=1` (#3381). On a stock build unknown switches are ignored
+silently; confirm each from the engine log. The full current list is in the production section of `docs/linux-dual-6900xt.md`.
 
-Expected (E533, `bench/benchmark.py` synthetic load, no vision encoder): prompt 1,008 / 1,800 / 2,171 tok/s at
-4K / 32K / 128K, decode 75 / 79 / 78 for one request.
+Expected (E675/E676, `bench/benchmark.py`, this concurrent config, no vision encoder): prompt 1,858 / 2,094 / 2,425 tok/s at
+16K / 32K / 128K, decode 88 / 82 at 4K / 32K; standard benchmark 4K / 16K 1,123 / 1,919, 12/12.
+
+**Card-to-card copies:** bidirectional P2P collapses to 3–4 GB/s a direction unless the cards are awake (display, or SMU deep sleep off)
+*and* BIOS Preferred IO = Manual. It only matters for idle copy-only loads. Never write `/sys/.../pp_features` while the driver runs
+(a full mask during GFXOFF hung the SMU and rebooted the box, E668).
 
 ## Do not retry (measured, closed on this hardware)
 
 - Decode knobs alone: `--kv-resident` shrink, `--pipeline-windows 2` alone, other `--spec` / `--spec-min-p` pairs
   (the combination `--spec 3 --spec-min-p 0.7 --pipeline-windows 2` is what works).
-- MMQ tile / stream-K changes for IQ3_S experts; `--prefill` chunks other than 8192 on Linux; tensor parallel (+6%).
+- MMQ tile / stream-K changes for IQ3_S experts; `--prefill` chunks other than 8192 on Linux; tensor parallel (E234 +6%; E660–E664 decode 6–7% slower a window on 16 GB cards, cannot run beside `--parallel 2`); DFlash2 on two cards (E646/E647); draft-side switches under `--pipeline-windows 2` (the draft is off the critical path, E664).
 - PCIe x16+x4 instead of x8/x8 for long prompts (long prompts wait on PCIe only 0.2–0.7% of the time).
 - GPU core / memory overclock (decode does not follow the clock, E507–E512); CPU and RAM speed (decode is GPU-bound: 6 → 4 CPU expert threads did not slow it, E524; not written up in docs/).
 - Windows: `STRATA_SH_STREAM` (slower, and stops the engine with KV streaming), large pages (error 1450 with 64 GB),
