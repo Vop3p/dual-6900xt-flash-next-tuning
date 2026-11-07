@@ -22,7 +22,7 @@ Every change is opt-in; with none of the switches set the engine behaves as the 
 
 Production also sets `STRATA_DP_PEER_RES=0` (upstream switch, +4~6% here) and `--prefill 16384`. End-to-end:
 prompt +8~10% (16K / 32K / 128K 1,858 / 2,094 / 2,425), decode unchanged, 12/12 - see
-[docs/linux-dual-6900xt.md](../../docs/linux-dual-6900xt.md) and `data/linux-dp-0.2.10.csv`.
+[docs/linux-history.md](../../docs/linux-history.md) and `data/linux-dp-0.2.10.csv`.
 
 Limit: while a DP read runs, a request that arrives waits for it to finish.
 
@@ -48,4 +48,4 @@ this box: deterministic prompt 8K +4.3~4.5%, 32K +7.2~7.4%; decode whole-run +8.
 gate 12/12; 128K / 200K reads without OOM or stall. Cost: card 0 has ~430–450 MiB left after loading instead of 908 (its expert slots
 do not shrink); on one card the 641 MiB of copies left too little for the draft head in one of two cold starts (E706), so on one card leave
 `STRATA_HC_PERSIST_Q8` off or free VRAM first; E704's worst case (200K read + a picture + 32K concurrently, then two 120K reads at once, GPU vision on) ran 9/9
-with 0 stalls and a VRAM peak of 16.3 GB without paging. See `docs/linux-dual-6900xt.md`.
+with 0 stalls and a VRAM peak of 16.3 GB without paging. See `docs/linux-history.md`.

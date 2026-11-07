@@ -6,7 +6,7 @@ this file is the short, actionable part. Numbers below are measurements from the
 ## Hardware and software this applies to
 
 - **Linux box:** 2x AMD RX 6900 XT 16 GB (gfx1030, PCIe 4.0 x8 each), Ryzen 5 5600X, 128 GB DDR4-3200, Ubuntu, ROCm 10.0,
-  Strata (0.2.11 + patches + on-demand DP + MMQ activation reads as of 2026-11-06 09:40). Model: Qwen3.8-Flash-Next GSQ-RCO IQ3_S (two GGUF shards + Strata pack).
+  Strata (0.2.11 + patches + on-demand DP + MMQ activation reads + the 11-06 kernel batch, as of 2026-11-07). Model: Qwen3.8-Flash-Next GSQ-RCO IQ3_S (two GGUF shards + Strata pack).
 - **Windows PC:** one RX 6900 XT 16 GB, i9-10900K, 64 GB, Windows 11, Strata Terminal 0.2.3.1 with the official
   `windows-x86_64-hip-rdna2` engine package 0.1.48.
 - Other RDNA2 cards (6800 / 6800 XT / 6950 XT = gfx1030, 6700 XT = gfx1031) were **not measured**; expect the same
@@ -46,10 +46,10 @@ STRATA_PIPED_CONCURRENT=1 STRATA_PREFILL_CPU_SHARE=auto STRATA_PREFILL_STREAM_MI
 STRATA_PIPED_MTP=2 STRATA_SELECT_SIMT=2 STRATA_PREFILL_CPU_SHARE_BATCH=1 STRATA_ROCBLAS_TUNING=<dir>`):
 `STRATA_STAGE_TRIM=1 STRATA_PREFILL_PIPE_FLOOR=4096`, the GDN group `STRATA_GDN_HEAD=1 STRATA_GDN_PP=2 STRATA_GDN_CONVL2=1 STRATA_GDN_NOY=1`,
 `STRATA_DEQUANT_WIDE=1`, the slot copy `STRATA_SLOT_COPY_DIRECT=1 STRATA_SLOT_COPY_BATCHSYNC=1 STRATA_SLOT_CKPT_MOVE=1`, `STRATA_SIDE_MIXER=2`,
-and the DP read `STRATA_DP_PREFILL=1 STRATA_KV_HOST_DMA=1 STRATA_DP_MIN=12288 STRATA_DP_PEER_RES=0` (PR #5002 + its `dp-followups`) plus the switches
+and the DP read `STRATA_DP_PREFILL=1 STRATA_KV_HOST_DMA=1 STRATA_DP_MIN=9216 (12288 until 11-07; E712) STRATA_DP_PEER_RES=0` (PR #5002 + its `dp-followups`) plus the switches
 that only exist with `patches/strata/`: `STRATA_DP_BATCH=1 STRATA_DP_LAZY=1 STRATA_DP_STAGE_W=3 STRATA_DP_STAGE_MIN=0 STRATA_DP_MTP_ALL=1`. Local patches still
 not upstream: `STRATA_PW_WITH_BATCH=1` (#3095), `STRATA_PROMPT_ATTN_RDNA2=1` (#3381). On a stock build unknown switches are ignored
-silently; confirm each from the engine log. The full current list is in the production section of `docs/linux-dual-6900xt.md`.
+silently; confirm each from the engine log. The production json is the reference; `docs/linux-dual-6900xt.md` has the current state and `docs/linux-history.md` the reason for each switch.
 
 Kernel-batch switches on top of the env above (they only exist with `patches/strata/0002` or 0.2.8+):
 `STRATA_F16_NOWIDEN=1 STRATA_HC_PERSIST_Q8=2 STRATA_MMVQ_NW1=1 STRATA_EXP_TABLE=1 STRATA_SWIGLU_Q8=1 STRATA_ATTN_MERGE_V2=1 STRATA_FUSE_HITS=1
@@ -78,7 +78,7 @@ Rollback build: `strata-0211scal` (no 0002, `--vram-reserve-later-mib 444`, no k
 - GPU core / memory overclock (decode does not follow the clock, E507–E512); CPU and RAM speed (decode is GPU-bound: 6 → 4 CPU expert threads did not slow it, E524; not written up in docs/).
 - Windows: `STRATA_SH_STREAM` (slower, and stops the engine with KV streaming), large pages (error 1450 with 64 GB),
   a rocBLAS table made under Linux (refused), a VRAM reserve below ~1 GiB left free (pages, answers go wrong).
-- Full list with reasons: `docs/linux-dual-6900xt.md` ("Closed directions"), `docs/windows-one-card.md`,
+- Full list with reasons: `docs/linux-history.md` ("Closed directions"), `docs/windows-one-card.md`,
   `docs/mechanisms.md` (mistakes).
 
 ## How measurements here were made (follow the same rules)
@@ -95,7 +95,7 @@ Rollback build: `strata-0211scal` (no 0002, `--vram-reserve-later-mib 444`, no k
 
 ## Repository map
 
-- `README.md` / `README.zh-CN.md` — overview. `docs/*.md` (English) and `docs/*.zh-CN.md` (Chinese) — the same content.
+- `README.md` / `README.zh-CN.md` — overview. `docs/linux-dual-6900xt.md` — current two-card state (short); `docs/linux-history.md` — every experiment, newest first. `docs/*.md` (English) and `docs/*.zh-CN.md` (Chinese) — the same content.
 - `data/*.csv` — numbers behind the charts (`data/README.md` describes the columns).
 - `patches/llama.cpp/` — eight patches on llama.cpp `159c651f5` plus `extra-mmq-y-scalar-rdna2.diff` (on 0001–0006); `patches/strata/` — the on-demand DP
   patch (0001) and the 11-06 kernel batch (0002); `bench/results/eNNN/` — raw results.

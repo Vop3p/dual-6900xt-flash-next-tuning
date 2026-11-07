@@ -15,17 +15,20 @@
 
 | 你的机器 | 结果 | 看这里 |
 |---|---|---|
-| **2× RX 6900 XT，Linux**（Ryzen 5 5600X、128 GB、各 PCIe 4.0 x8） | 两张卡一起读同一个 prompt：31K / 128K / 256K **2,301 / 2,628 / 2,636** tok/s（0.2.11 + 补丁 + 按需 DP + MMQ 激活读法 + 11-06 内核批，11-06 22:3x 起上生产；16K 到 256K 比 11-04 生产 +20~24%），内核批之前解码 32K **82**、4K **88**，内核批整轮再 **+8.5%**；11-07 起 9.2K 以上就两卡一起读（原为 12.3K，9.2K–12.3K 快 7~21%）；标准基准 4K / 16K **1,234 / 2,124**、解码 81 / 86（0.2.7 原版包 829 / 1,356）；相对 llama.cpp：解码约 3 倍、32K 读 prompt 约 8 倍 | [docs/linux-dual-6900xt.zh-CN.md](docs/linux-dual-6900xt.zh-CN.md) |
+| **2× RX 6900 XT，Linux**（Ryzen 5 5600X、128 GB、各 PCIe 4.0 x8） | Strata 0.2.11 + 补丁：读 prompt 4K / 16K / 31K / 256K **1,234 / 2,124 / 2,301 / 2,636** tok/s，解码 **81–86**；相对 llama.cpp：解码约 3 倍、32K 读 prompt 约 8 倍 | [docs/linux-dual-6900xt.zh-CN.md](docs/linux-dual-6900xt.zh-CN.md)（现状）· [历史](docs/linux-history.zh-CN.md) |
 | **一张 RX 6000，Windows**（6800 / 6800 XT / 6900 XT / 6950 XT / 6700 XT） | 官方包只改设置：16K 读 prompt **479 → 1,076**，解码 **28 → 42**；一个 PowerShell 脚本装好 | [windows-rx6000/](windows-rx6000/README.md)（懒人包，英文）· [docs/windows-one-card.zh-CN.md](docs/windows-one-card.zh-CN.md)（怎么调出来的） |
 | **llama.cpp 跑稠密 Qwen3.8-27B**，双卡 | 32K 读 prompt 731，解码短上下文 62 / 32K 44；8 个 RDNA2 llama.cpp 补丁 | [docs/27b-llamacpp.zh-CN.md](docs/27b-llamacpp.zh-CN.md) · [patches/llama.cpp/](patches/llama.cpp/README.md) |
 
 ## 其他
 
-- [docs/timeline.zh-CN.md](docs/timeline.zh-CN.md)：09-21 到 11-06 的每一步和实测效果。
+- [docs/timeline.zh-CN.md](docs/timeline.zh-CN.md)：09-21 到 11-07 的每一步和实测效果。
 - [docs/mechanisms.zh-CN.md](docs/mechanisms.zh-CN.md)：这几张卡上速度卡在哪里，以及我在这上面犯过的错。
 - [data/](data/README.md)：每张图背后的数字（CSV）。
 - [bench/](bench/)：A/B 脚本（`run_ab.sh`、`benchmark.py`、`ab_compare.py`、`monitor_amd.py`），以及按实验编号存放的原始结果（`bench/results/eNNN/`）。
-- 这些机器发到上游的报告：Strata PR [#3426](https://github.com/Niko1221/Strata/pull/3426)（Linux，0.2.0-beta）、[#4012](https://github.com/Niko1221/Strata/pull/4012)（Windows，9 次标准运行）、#1927、#1657；引擎 PR #3073、#3095、#3381、#3382、#4005、#4006、draft #5146；社区报告 #4602（0.2.7）；DP 的发现贴在 [#5002](https://github.com/Niko1221/Strata/pull/5002)。
+- 这些机器发到上游的：
+  - 基准报告：[#5454](https://github.com/Niko1221/Strata/pull/5454)（0.2.11 + 补丁）、#4602（0.2.7）、[#4012](https://github.com/Niko1221/Strata/pull/4012)（Windows）、[#3426](https://github.com/Niko1221/Strata/pull/3426)（0.2.0-beta）、#1927、#1657；
+  - 引擎 PR：草稿 [#5474](https://github.com/Niko1221/Strata/pull/5474)、[#5475](https://github.com/Niko1221/Strata/pull/5475)、[#5476](https://github.com/Niko1221/Strata/pull/5476)（11-06 内核批）、#5146；已合入或更早的 #4006（进了 0.2.12）、#4005、#3073、#3095、#3381、#3382；
+  - DP 的发现贴在 [#5002](https://github.com/Niko1221/Strata/pull/5002)。
 
 实验编号（E…）对应作者的实验日志（未公开）。
 

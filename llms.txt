@@ -6,7 +6,8 @@ Start with AGENTS.md for how to reproduce and what not to retry. English docs ar
 
 ## Docs
 - [README.md](README.md): one-page overview and which document fits which hardware.
-- [docs/linux-dual-6900xt.md](docs/linux-dual-6900xt.md): the two-card Linux production setup (engine build, patches, switches, arguments), current speed, where time goes (stock vs tuned phase breakdown), closed directions.
+- [docs/linux-dual-6900xt.md](docs/linux-dual-6900xt.md): the two-card Linux setup now (short): build, speed by prompt length, the steps that mattered, what is open.
+- [docs/linux-history.md](docs/linux-history.md): the full two-card Linux log, newest first (every production change, phase breakdowns, closed directions).
 - [docs/windows-one-card.md](docs/windows-one-card.md): one RX 6900 XT under Windows 11: WDDM per-submission cost, VRAM reserve, PCIe share, prompt chunk, copy events, pictures.
 - [windows-rx6000/README.md](windows-rx6000/README.md): the "lazy pack": a PowerShell script that installs the official Strata Terminal and rdna2 engine package with the measured settings; optional GPU picture reader.
 - [docs/27b-llamacpp.md](docs/27b-llamacpp.md): dense Qwen3.8-27B on llama.cpp (`-sm tensor`, two cards): production state, patches, profiling.
