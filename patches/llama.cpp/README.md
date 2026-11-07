@@ -25,6 +25,18 @@ End to end (4–6 together, production `qwen38-tp`, Qwen3.8-27B UD-Q5_K_XL, two 
 
 Only tested on gfx1030 (ROCm 10.0, HIP clang). The `asm` in patches 5–6 is guarded by `defined(GGML_USE_HIP) && defined(RDNA2)`; other targets compile the unchanged `ggml_cuda_dp4a`. `test-backend-ops -o MUL_MAT`: 1304/1304 pass.
 
+## Extra: `extra-mmq-y-scalar-rdna2.diff` (11-06, used by Strata, not a `git am` patch)
+
+A plain diff (apply with `git apply`) on top of patches **0001–0006** (`fb5d45967`); it conflicts with 0007/0008 in
+`tests/test-backend-ops.cpp` only. Strata's production ggml since 2026-11-06 is `fb5d45967` + this diff, built with
+`-DCMAKE_HIP_FLAGS=-DGGML_CUDA_MMQ_Y_SCALAR`; without that define nothing changes.
+
+What it does (HIP only): in the MMQ dot products of IQ3_XXS / IQ3_S / IQ4_NL / IQ4_XS / IQ2_XXS / IQ2_XS / IQ2_S / Q8_0 / Q2_0 the
+q8_1 activations are read wave-uniformly from global memory through the scalar unit (`s_load`), with no y tile in shared memory
+and the wave's column bases hoisted out of the loops. Kernel (real expert routing, batch 8192 → 512, E684c): IQ3_XXS +12~23%, IQ3_S +18~27%,
+IQ4_NL +9~22%, IQ2_S +14~22%; correctness 98/98 + 38/38 against the CPU reference. In Strata (E685): prompt 4K–128K +2.8~4.9%, 1–2K flat,
+decode flat, standard gate 12/12; output not bitwise (the same build is not bitwise across runs either).
+
 ## License
 
 MIT (`LICENSE` in this directory), the same license as llama.cpp. The patches are derived works of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT, Copyright (c) 2023-2026 The ggml authors); applying them with `git am` adds nothing that llama.cpp's own license does not already permit. Cite the repository (`CITATION.cff` at the top level) or the commit hashes in the patch files.

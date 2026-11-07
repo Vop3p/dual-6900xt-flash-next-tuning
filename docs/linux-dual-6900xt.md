@@ -13,6 +13,8 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 
 ## Where it stands
 
+- **Production (since 11-06 22:3x, the merged kernel batch):** `strata-0211wl2-1a996f63` = the 09:40 build below + the 11-06 kernel batch (`patches/strata/0002`; the int8 hc copies on Q8_0's grid, `STRATA_HC_PERSIST_Q8=2`): prompt **2,301 / 2,628 / 2,636** at 31K / 128.5K / 256K, +5~9% over the 09:40 build and **+20~24%** over the 11-04 production from 16K to 256K, every point from 46K up above 2,500 (E705); deterministic 32K +7.3%, decode whole-run **+8.5%** (E703); standard benchmark 4K / 16K **1,234 / 2,124**, decode 80.7 / 85.5 (parallel 1, E707), gate 12/12; worst-case concurrent run with vision 9/9 (E704). Details: [the 11-06 section](#0211-mmq-activation-reads-and-the-merged-kernel-batch-11-06-e678e708).
+- **Production (11-06 09:40 – 22:3x, 0.2.11 + MMQ activation reads):** `strata-0211scal-9e10fd77` = Strata upstream **0.2.11** (03:16, flat, token-for-token identical to 0.2.10 with `--vram-reserve-later-mib 444`, E678) + a ggml patch that reads the MMQ activations wave-uniformly (E685): prompt **2,160 / 2,507** at 32K / 128K (+2.8~4.9% from 4K to 128K, 1–2K flat), decode flat, gate 12/12.
 - **Production (since 11-06 00:57 on 0.2.10 + on-demand DP):** `strata-0210dp-e6e76570` = Strata upstream **0.2.10** merged into the local patch set (flat against 0.2.9, E645) with `STRATA_SIDE_MIXER=2` (decode +3%) and `--spec-min-p 0.6` (11-03), plus upstream PR #5002's data-parallel prompt read with our changes on top: prompt **1,858 / 2,094 / 2,425** at 16K / 32K / 128K (+8~10%), decode unchanged, gate 12/12. Card-to-card copies need the cards awake *and* BIOS Preferred IO = Manual. Details: [the 11-03 – 11-06 section](#0210-on-demand-dp-prompt-read-and-the-card-to-card-collapse-11-03--11-06-e645e677).
 - **Production (since 10-31 16:0x on 0.2.9; kernel 7.0.0-42 since 11-02):** `strata-029f` = Strata upstream **0.2.9** merged into the same local patch set, with the 10-29 settings below plus two prompt switches (GDN group, `STRATA_DEQUANT_WIDE=1`; prompt +5~12%, 10-30) and, since 11-02, the slot-copy switches (a long request interrupted by a second one decodes +28%). Standard benchmark (E642, production concurrent config): prompt **1,136 / 1,793** at 4K / 16K, 12/12, 0 stalls. Details and what was ruled out: [the 10-30 – 11-02 section](#028--029-two-prompt-switches-and-what-the-last-four-days-ruled-out-10-30--11-02-e620e642).
 - **Production (since 10-27 18:40 on 0.2.7, `--prefill-pipe 3072` since 10-29 05:06):** `strata-027-9ca7fd21` = Strata upstream **0.2.7** (engine 0.1.52; #2985's pipelined MTP is upstream now as #4121) merged into the local patch set - #3381 (RDNA2 prompt attention), #3382 (CPU share beside `--batch`), #3073 (SIMT=2 scorer), #3095 (pipeline windows beside batch slots) - plus the modified llama.cpp ggml and the rocBLAS 5.6.0 table; 0.2.6 (E587) and 0.2.7 (E596) were each flat against the build before. Benchmark load (E596): prompt **1,009 / 1,786** at 4K / 32K, decode 78-85. `--prefill-pipe 3072` then lifted 8K **+16%** and 12K **+8%** (E613), and upstream #3821's chunk floor (`STRATA_PREFILL_PIPE_FLOOR=4096` with `--prefill-pipe 1600`) another +3-8% at 7K-20K (E617, below); production is `strata-027f-3177b96f` since 10-29 07:1x; since 10-29 13:01 its json also pins `layer_split: 27` with `STRATA_STAGE_TRIM=1` (each card keeps only its own layers' dense weights; 2K prompt +8%, decode +1-3%, E618/E619, below).
@@ -49,6 +51,81 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 - **Whole journey, same IQ3_S model:** decode 26 → ~80 tok/s (≈3×), 32K–37K prompt 274 → 1,790 tok/s (≈6.5×), 128K 821 (0.1.39) → 2,158. The engine switch (llama.cpp → Strata) is most of it; the patches and configuration after that roughly doubled the prompt (37K 714 → 1,433 → 1,705; 32K 1,790 and 128K 2,158 on 10-20) and added about +40% decode (56–58 → 80).
 - **Closed directions (measured; do not retry on this box):** every decode-side configuration knob — `--kv-resident` shrink (E382), `--pipeline-windows 2` alone (E384, +1–6%), the 16-point `--spec` × `--spec-min-p` grid at `--pipeline-windows 1` (E385, 4/0.5 is the peak of accepted tokens per window) — **but the combination works**: `--spec 3 --spec-min-p 0.7 --pipeline-windows 2` decodes +10–16% at 4K and +8–11% at 32K (E387, three confirmation rounds; the short draft is accepted 83% of the time instead of 68%, so the speculative second window hits). Prompt speed unchanged; output differs between starts (the baseline is deterministic); 128K +11% in the no-vision-encoder configuration (E388); in production since 10-09 00:16; batch slots as evaluated on 10-08 (resident experts 41% < upstream's 50% gate, slots decode without MTP; **overturned 10-15**: with slot drafts, the solo path kept pipelined and later #2985, `"parallel": 2` is production); MMQ tile / stream-K for IQ3_S (E279/E280); `--prefill` chunks other than 8192 (E296); tensor parallel (E234, +6%); and the upstream opt-ins that upstream itself measured as neutral or negative on small cards (chunked GDN, Foresight swap slots, pinned stage buffers).
 - **What is left:** the PCIe topology for long prompts (x8/x8 kept: on Strata a long prompt waits on PCIe only 0.2–0.7% of the time; a <2K one ~6–13% on 0.2.9, E634 - E482's 43–54% is overturned); more expert swaps per decode window (E499: the adaptive cache already hits 85%, a perfect 8-window predictor would not beat it at today's swap rate - the swap budget is the lever, untested). Four PRs wait for upstream review on 0.2.0-beta (#3381, #3382, and #3073 / #3095 reopened 10-20 with the E503 numbers).
+
+## 0.2.11, MMQ activation reads, and the merged kernel batch (11-06, E678–E708)
+
+Three steps in one day. Every number is from same-session interleaved runs unless marked; the raw values are in `data/linux-steps-0.2.11.csv`.
+
+**1. 0.2.11, production since 11-06 03:16** (`strata-0211dp-7680d258`, E678). v0.2.11 merged into the DP build (205 commits, one conflict, both sides kept). Prompt 16K–128K within ±1% in the production concurrent config, decode within the run-to-run spread, standard gate 12/12 (1,122 / 1,921 against 1,123 / 1,918 in the same session). The output text changed, and a diagnostic arm showed why: 0.2.11 reserves 256 MiB more on the later card, which cost card 1 123 expert slots, and the extra CPU-computed experts round differently. With `--vram-reserve-later-mib 444` (444 + 256 = the old 700) the slots come back and the output is token-for-token identical to 0.2.10, so production runs with that flag.
+
+**2. MMQ activations read wave-uniformly, production since 11-06 09:40** (`strata-0211scal-9e10fd77`, E679–E685). A newer upstream MMQ was no faster end to end here (E682, ±1%). Performance counters on the production MMQ kernels (E679c) showed them VALU-issue-bound (70–77% of issue slots busy, dot4 only 38–43% of the VALU work), with most of the extra instructions in the inner loop being shared-memory address arithmetic and reads of the q8_1 activations. Reading those activations through the scalar unit instead (`s_load`, wave-uniform addresses, no y tile in shared memory) took a minimal kernel from 31 to 44 TOPS (E683) and the real kernels up 9~27% (IQ3_XXS / IQ3_S / IQ4_NL / IQ2_S, real routing, E684c). In Strata:
+
+| | 4K | 32K | 64K | 128K |
+|---|---|---|---|---|
+| 0.2.11 (production concurrent config, two runs) | 1,086–1,092 | 2,102 / 2,098 | 2,327 / 2,327 | 2,407 / 2,426 |
+| + MMQ y reads | 1,128–1,132 | 2,160 / 2,161 | 2,401 / 2,402 | **2,507 / 2,507** |
+
+Deterministic arms: 8K +4.3/+4.9%, 32K +2.5/+2.9%, 1–2K within ±1%. Decode flat, gate 12/12, ctest no new failures, the MMQ parity test passes. Output is not bitwise (the same build is not bitwise across runs either). Patch: [`patches/llama.cpp/extra-mmq-y-scalar-rdna2.diff`](../patches/llama.cpp/README.md).
+
+**3. The merged kernel batch, production since 11-06 22:3x** (`strata-0211wl2-1a996f63`, E688–E708). Each change was checked alone first, then all of them were tested together against production (E703, one maintenance window):
+
+| Change | Checked alone |
+|---|---|
+| `STRATA_F16_NOWIDEN=1`: the hyper-connection up projection and `attn_qkv` stay FP16; the mixer and the GDN convolution read FP16 instead of a widened copy (E688/E688b) | bitwise (12/12, 6/6 self-checks); up projection alone 8K +1.3~2.7%, 32K +1.9~2.1% |
+| `STRATA_HC_PERSIST_Q8=2`: the persistent hc read (our #2226) reads int8 copies of its weights on Q8_0's grid, one fp16 scale per 32 values (E693b with a coarser grid, E708) | decode +6.4% whole-run (E693b); not bitwise (see quality below) |
+| `STRATA_MMVQ_NW1=1`: a one-warp dense GEMV for 2–4 tokens (E698) | kernels −6~42%, bitwise |
+| `STRATA_EXP_TABLE=1`: decode expert kernel layout chosen per quant format (E698/E699) | layers −5~27%, bitwise (one layer slower with few groups and three tokens) |
+| `STRATA_SWIGLU_Q8=1`: the fused SwiGLU + quantize kernel on HIP too (E701) | 408/408 byte-identical |
+| upstream `STRATA_ATTN_MERGE_V2 / FUSE_HITS / IQ_STAGE_TABLES / PLE_COMPACT / PLE_COPY_STREAM`, `--mtp-q4 head` (E697) | prompt 32K +2%, decode +0.5% / +0.7% |
+
+Together (E703): ctest 224 with only the three known failures; deterministic prompt 1K +0.6~1.4%, **8K +4.3~4.5%, 32K +7.2~7.4%**; decode in the production pipelined setup, whole-run total tokens over total decode time with 24 replayed real requests, **+8.5%** (three pairs interpolated between baseline runs: +7.2 / +10.9 / +7.5%; 25.0 → 22.9 ms a window, tokens per window unchanged); standard gate 12/12, 0 stalls; 128K and 200K reads (synthetic text) **2,645 / 2,715 tok/s**, no OOM, no stall.
+
+**Quality of the int8 hc copies.** Teacher-forced over 8 chats against a double-precision reference: mean KL 0.0496 for the merged build and 0.0496 for production; chat by chat each side wins four and single chats differ by up to 5×, so the mean says nothing finer than "no large regression" (E693b alone showed 0.0454, which is the same noise - it is not "more accurate"). The one consistent signal: top-10 overlap is lower in all 8 chats, −1.3 points (−1.1 for E693b alone), argmax agreement shows no consistent change - the int8 weights move the tail of the distribution, not the top token. An offline check of the quantisation error (E708a, every BF16 hc tensor of the 48 layers) explains part of it: one fp32 scale per 128 columns (down / inject) and per 320-value row (up) gives 0.81 / 0.88 / 1.09% relative RMS error, 1.3–1.6× the 0.61–0.67% of a Q8_0 grid (one fp16 scale per 32 values, what upstream's `STRATA_HC_Q8` uses). Production therefore runs that grid (`STRATA_HC_PERSIST_Q8=2`, E708; `=1`, the coarser grid, is still in the code; E703 above was measured with `=1`): the start-up self-check's max relative difference drops from 0.00705 to 0.00497; top-10 overlap with the reference is −0.7 points from the unquantised read instead of −1.3 (upstream's `STRATA_HC_Q8` in the same run: −0.4), better than the coarser grid in 6 of 8 chats, with the KL means again inside the chat-to-chat noise; decode whole-run +0.3% against the coarser grid (noise: the 3% more bytes do not show), 24/24 replays, gate 12/12.
+
+**Cost and worst case.** The copies take 360 / 280 MiB on the two cards (347 / 269 with the coarser grid; `--vram-reserve-later-mib 844`). Card 1 gives up 196 expert slots; card 0 keeps its slots and has 452 MiB free after loading instead of 908 (318 MiB at the start of a request, under the engine's 512 MiB warning). E704 ran the production json with the GPU vision encoder on: a picture alone; a 200K read on one slot while the other read a picture and then 32K; two ~120K reads at once; a picture and a sanity question - 9/9 correct, 0 stalls, 0 OOM, VRAM peak 16.3 GB on each card, GTT at most 38 MiB (nothing paged to system memory). At the production switch-over (Q8_0 grid) card 0 had ~430 MiB free after loading. **One card is on the edge:** a single 6900 XT holds all 96 hc reads, 641 MiB of copies, which left 264 MiB for the 213 MiB draft head (the fit check counts the Q6_K head even with `--mtp-q4 head`); in E706 one of two cold starts refused the draft head and stopped. On one card leave `STRATA_HC_PERSIST_Q8` off, or free VRAM first (smaller context or reserve). Patch: [`patches/strata/0002-waitlist-0211-2x6900xt.patch`](../patches/strata/README.md).
+
+**Prompt-speed curve (E705 / E705b).** The 11-04 curve's corpus and load (E659: synthetic code text, production concurrent config without the encoder, 26 points to 128.5K with two runs each, 153.6K–256K once, every request fresh). Columns: the 11-04 production (0.2.10, layer split, before DP), the 09:40 production (0211scal), the merged build with DP, and the same merged build with `STRATA_DP_PREFILL=0` (layer split 27). Selected points (all 31 in the interactive page's data):
+
+| Prompt | 11-04 | 0211scal | merged | merged, no DP | merged vs 11-04 | DP vs layer split |
+|---|---|---|---|---|---|---|
+| 5.6K | 1,165 | 1,214 | 1,282 | 1,289 | +10.0% | −0.6% |
+| 10.8K | 1,518 | 1,563 | 1,644 | 1,651 | +8.3% | −0.4% |
+| 15.9K | 1,704 | 1,972 | 2,119 | 1,794 | +24.4% | +18.1% |
+| 26.1K | 1,873 | 2,160 | 2,340 | 2,016 | +24.9% | +16.1% |
+| 31K | 1,902 | 2,131 | 2,301 | 2,064 | +21.0% | +11.5% |
+| 62K | 2,092 | 2,321 | 2,525 | 2,287 | +20.7% | +10.4% |
+| 82K | 2,114 | 2,518 | 2,670 | 2,121 | +26.3% | +25.9% |
+| 128.5K | 2,197 | 2,493 | **2,628** | 2,313 | +19.6% | +13.6% |
+| 204.8K | 2,208 | 2,519 | 2,646 | 2,346 | +19.9% | +12.8% |
+| 256K | 2,187 | 2,516 | **2,636** | 2,362 | +20.5% | +11.6% |
+
+The merged build is +5~9% over 0211scal at every point above 5K and +20~24% over the 11-04 production from 16K to 256K; every point from 46K up is above 2,500 (plateau ~2,630–2,670). Below 12,288 tokens DP does not engage (`STRATA_DP_MIN`), so 5.6K / 10.8K show the kernels alone. DP against layer split on the same build: ≤11K flat, 16K–26K +16~19%, 31K–67K +10~15%, 72K–123K +16~26%, 154K–256K +12~17% - more than on 0.2.10 (E675: +7.7% at 16K, +10.4% at 128K); why was not measured. The prompt read does not go through the hc read, so the curve holds for either hc grid (it ran with the coarser one). The 512-token point is cold-start noise and left out.
+
+**One card (E706, the E643 one-card config, five prompt lengths):**
+
+| Build | 5.6K | 15.9K | 31K | 62K | 128.5K | decode 32K (benchmark) |
+|---|---|---|---|---|---|---|
+| 0211dp (two runs) | 1,165–1,173 | 1,306–1,307 | 1,304–1,305 | 1,300 | 1,293–1,294 | 51.3 / 54.6 |
+| 0211scal (two runs) | 1,204–1,219 | 1,359 | 1,352–1,358 | 1,349–1,350 | 1,345–1,347 | 53.4 / 51.0 |
+| merged, Q8_0 grid (one run) | 1,250 | 1,437 | 1,427 | 1,411 | 1,408 | 54.2 |
+
+The day's kernels give one card +4.6~5.7% prompt over 0211scal from 16K to 128K (+9~10% over 0211dp); decode is one sample per arm, inside the spread. The merged arm has one run because its other cold start refused the draft head (see the cost paragraph above).
+
+**Strata's standard benchmark on the merged build (E707, `strata bench run`, custom track, all 12/12, 0 stalls):**
+
+| Arm | Prompt 4K | Prompt 16K | Decode short / 4K / 16K |
+|---|---|---|---|
+| Two cards, parallel 1 (the #4602 setup) | 1,234 | 2,124 | 84.7 / 80.7 / 85.5 |
+| One card | 1,058 | 1,434 | 52.9 / 49.8 / 48.6 |
+
+Against the patched 0.2.7 rows above (E616, two cards 1,021 / 1,585, one card 1,023 / 1,232; different days): +21% / +34% on two cards, +3% / +16% on one.
+
+**Closed on 11-06 (measured; do not retry unless the stated condition changes):**
+- **Prompt attention with dot2 scores** (`STRATA_PROMPT_ATTN_RDNA2=2`, E687/E702): kernel −14% (prompt 32K ≈ +1.6%, estimated), but the FP16 rounding of Q comes out as 3e-3 relative error against FP64, against 2e-6 for the current kernel. The code stays in `0002` unused. Reopen only with a path that does not round Q to FP16, or if attention grows past ~25% of the prompt time.
+- **MMQ IQ2_S / Q2_0 at fewer VGPRs** (E700): 174 → 160 and 216 → 177 VGPRs reached the next occupancy step, prompt 0 to −1%. Reopen if shared memory, not VGPRs, turns out to cap the waves and can be cut too.
+- **hc read without barriers** (E691): the barriers cost ~4 µs a read; replacing them with one atomic barrier made the read 21–25% slower.
+- **Prefetch inside the int8 hc read** (E693c): moved the reads to an earlier phase, saved 0.4 µs; the int8 read already runs at ~95% of bandwidth.
+- **A second guess on the bonus token** (E694/E694b): the runner-up token is right 31% of the time the top one is wrong, but each extra verify row costs card 0 +1.9 ms (most new experts are in the CPU pool), at least as much as it would win. Reopen if a row costs <0.5 ms (all experts in VRAM).
 
 ## 0.2.10, on-demand DP prompt read, and the card-to-card collapse (11-03 – 11-06, E645–E677)
 

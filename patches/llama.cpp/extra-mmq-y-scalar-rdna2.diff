@@ -1,0 +1,208 @@
+diff --git a/ggml/src/ggml-cuda/mmq-vec-dot.cuh b/ggml/src/ggml-cuda/mmq-vec-dot.cuh
+index 921dbd9f2..d0bc63775 100644
+--- a/ggml/src/ggml-cuda/mmq-vec-dot.cuh
++++ b/ggml/src/ggml-cuda/mmq-vec-dot.cuh
+@@ -119,6 +119,13 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
+     const int   * y_qs = (const int   *) y + 4;
+     const float * y_df = (const float *) y;
+ 
++#if defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
++    // E684b: the wave's column bases, once per call and wave-uniform: inside the loops only constant offsets (j0) and one
++    // add per k step remain, which fold into s_load's immediate instead of a 64-bit address computation per load
++    const int     wy      = __builtin_amdgcn_readfirstlane(threadIdx.y);
++    const int   * y_qs_w  = mmq_y_scalar_type(type) ? y_qs + wy*MMQ_TILE_Y_K : y_qs;
++    const float * y_df_w  = mmq_y_scalar_type(type) ? y_df + wy*MMQ_TILE_Y_K : y_df;
++#endif // defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
+ // #pragma unroll
+     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += VDR_Q8_0_Q8_1_MMQ) {
+         const int k0 = k00 + k01;
+@@ -131,6 +138,15 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
+             for (int i0 = 0; i0 < I; i0 += warp_size) {
+                 const int i = i0 + threadIdx.x;
+ 
++#if defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
++                if constexpr (mmq_y_scalar_type(type)) {
++                    GGML_UNUSED(j);
++                    sum[j0/nwarps*I/warp_size + i0/warp_size] += vec_dot_q8_0_q8_1_impl<float, VDR_Q8_0_Q8_1_MMQ>
++                        (&x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0], &y_qs_w[j0*MMQ_TILE_Y_K + k0 % MMQ_TILE_NE_K],
++                         x_df[i*(2*MMQ_TILE_NE_K/QI8_0) + i/(QI8_0/2) + k0/QI8_0], y_df_w[j0*MMQ_TILE_Y_K + (k0/QI8_1) % (MMQ_TILE_NE_K/QI8_1)]);
++                    continue;
++                }
++#endif // defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
+                 sum[j0/nwarps*I/warp_size + i0/warp_size] += vec_dot_q8_0_q8_1_impl<float, VDR_Q8_0_Q8_1_MMQ>
+                     (&x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k0 % MMQ_TILE_NE_K],
+                      x_df[i*(2*MMQ_TILE_NE_K/QI8_0) + i/(QI8_0/2) + k0/QI8_0], y_df[j*MMQ_TILE_Y_K + (k0/QI8_1) % (MMQ_TILE_NE_K/QI8_1)]);
+@@ -451,6 +467,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
+     const int   * y_qs = (const int   *) y + 4;
+     const float * y_df = (const float *) y;
+ 
++#if defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
++    // E684c: as vec_dot_q8_0_q8_1_dp4a (E684b) - the wave's column bases once per call, wave-uniform: y loads as s_load
++    const int     wy      = __builtin_amdgcn_readfirstlane(threadIdx.y);
++    const int   * y_qs_w  = mmq_y_scalar_type(type) ? y_qs + wy*MMQ_TILE_Y_K : y_qs;
++    const float * y_df_w  = mmq_y_scalar_type(type) ? y_df + wy*MMQ_TILE_Y_K : y_df;
++#endif // defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
+ // #pragma unroll
+     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
+         const int k0 = k00 + k01;
+@@ -463,6 +485,17 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
+             for (int i0 = 0; i0 < I; i0 += warp_size) {
+                 const int i = i0 + threadIdx.x;
+ 
++#if defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
++                if constexpr (mmq_y_scalar_type(type)) {
++                    GGML_UNUSED(j);
++                    sum[j0/nwarps*I/warp_size + i0/warp_size] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(
++                        &x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0],
++                        &y_qs_w[j0*MMQ_TILE_Y_K + k01],
++                        &x_df[i*(2*MMQ_TILE_NE_K*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],
++                        y_df_w[j0*MMQ_TILE_Y_K + k01/QI8_1]);
++                    continue;
++                }
++#endif // defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
+                 sum[j0/nwarps*I/warp_size + i0/warp_size] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(
+                     &x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0],
+                     &y_qs[j*MMQ_TILE_Y_K + k01],
+diff --git a/ggml/src/ggml-cuda/mmq.cuh b/ggml/src/ggml-cuda/mmq.cuh
+index 7127a33f8..573b3c34b 100644
+--- a/ggml/src/ggml-cuda/mmq.cuh
++++ b/ggml/src/ggml-cuda/mmq.cuh
+@@ -444,6 +444,19 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
+ }
+ 
+ // FIXME temporary until all combinations of data types and GPUs can use the MMA data layout
++// E684: the types whose dp4a MMQ reads the q8_1 activations straight from global memory (wave-uniform s_load) under
++// GGML_CUDA_MMQ_Y_SCALAR on HIP: no y tile in shared memory for them (host size and device layout both use this)
++static constexpr __host__ __device__ bool mmq_y_scalar_type(const ggml_type type) {
++#if defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
++    return type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ3_XXS || type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_IQ4_XS ||
++           type == GGML_TYPE_IQ2_XXS || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q2_0 ||
++           type == GGML_TYPE_IQ2_S || type == GGML_TYPE_IQ2_XS;   // E684c: the q8_0_16 dp4a types too
++#else
++    GGML_UNUSED(type);
++    return false;
++#endif // defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
++}
++
+ static __host__ int ggml_cuda_mmq_get_nbytes_shared_x(const ggml_cuda_mmq_config & config, const int cc) {
+     if (config.use_mma_data_layout(cc)) {
+         return config.I * ggml_cuda_mmq_get_sram_stride(config.sram_layout) * 4;
+@@ -936,7 +949,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
+ 
+     extern __shared__ int data_mul_mat_q[];
+     int * tile_y = data_mul_mat_q + J;
+-    int * tile_x = tile_y + GGML_PAD(J*MMQ_TILE_Y_K, nwarps*warp_size);
++    int * tile_x = tile_y + (mmq_y_scalar_type(type) ? 0 : GGML_PAD(J*MMQ_TILE_Y_K, nwarps*warp_size));   // E684: no y tile for the y-scalar types
+ 
+ #if defined(BLACKWELL_MMA_AVAILABLE)
+     // FP4 tile stores 8 blocks. src1 above Q4 uses the generic
+@@ -954,6 +967,22 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
+ 
+     constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
+ 
++#if defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
++    // E684 (RDNA2): for the types whose dp4a dot product is vec_dot_q8_0_q8_1_dp4a, the q8_1 activations are read by each
++    // wave straight from global memory (the y tile in VRAM has exactly tile_y's layout - the copy below is a straight
++    // copy) with a wave-uniform column, so the compiler loads them with s_load into SGPRs and v_dot4 takes them as an
++    // operand: no LDS copy, no ds_read per column, two barriers per K tile instead of four
++    constexpr bool y_scalar = mmq_y_scalar_type(type);
++    if constexpr (y_scalar) {
++        for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
++            load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
++            __syncthreads();
++            vec_dot(tile_x, y + ncols_y * (kb0 * qk / ne_block) * sz, sum, 0);
++            vec_dot(tile_x, y + ncols_y * ((kb0 * qk / ne_block) * sz + sz), sum, MMQ_TILE_NE_K);
++            __syncthreads();
++        }
++    } else
++#endif // defined(GGML_CUDA_MMQ_Y_SCALAR) && defined(GGML_USE_HIP)
+     for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+         load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+         {
+@@ -1437,7 +1466,7 @@ struct mmq_args {
+ static size_t mmq_get_nbytes_shared(const ggml_cuda_mmq_config & config, const int cc) {
+     const size_t nbs_ids = config.J*sizeof(int);
+     const size_t nbs_x = ggml_cuda_mmq_get_nbytes_shared_x(config, cc);
+-    const size_t nbs_y = config.J * (sizeof(block_q8_1_mmq));
++    const size_t nbs_y = mmq_y_scalar_type(config.type) ? 0 : config.J * (sizeof(block_q8_1_mmq));   // E684
+     return nbs_ids + nbs_x + GGML_PAD(nbs_y, config.nthreads*sizeof(int));
+ }
+ 
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 081fb23ff..3940df684 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -5194,6 +5194,23 @@ struct test_mul_mat_w4a4 : public test_mul_mat {
+ };
+ 
+ static void init_mul_mat_id_ids(ggml_context * ctx, int n_mats) {
++    // E681: real routing (STRATA route dump, one layer, 8192 tokens x 10 experts, int32) when E681_IDS names the file and n_mats == 512
++    if (const char * fn = getenv("E681_IDS"); fn != nullptr && n_mats == 512) {
++        static std::vector<int32_t> real;
++        if (real.empty()) { FILE * f = fopen(fn, "rb"); if (f) { real.resize(8192*10); if (fread(real.data(), 4, real.size(), f) != real.size()) real.clear(); fclose(f); } }
++        GGML_ASSERT(!real.empty());
++        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
++            if (t->type != GGML_TYPE_I32 || ggml_is_view_op(t->op)) continue;
++            for (int64_t r = 0; r < ggml_nrows(t); r++) {
++                std::vector<int32_t> data; std::vector<char> used(n_mats, 0);
++                for (int i = 0; i < 10; i++) { const int32_t e = real[(r % 8192)*10 + i]; data.push_back(e); used[e] = 1; }
++                for (int e = 0; e < n_mats && (int64_t) data.size() < t->ne[0]; e++) if (!used[e]) data.push_back(e);
++                ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
++            }
++        }
++        return;
++    }
++
+     std::random_device rd;
+     std::default_random_engine rng(rd());
+     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+@@ -5213,6 +5230,11 @@ static void init_mul_mat_id_ids(ggml_context * ctx, int n_mats) {
+ 
+ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, float amax = 1.0f) {
+     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
++        // E681: perf only - random bytes instead of quantizing (IQ quantization of 512 experts takes minutes on the CPU)
++        if (getenv("E681_RANDBYTES") != nullptr && ggml_is_quantized(t->type)) {
++            std::vector<uint8_t> buf(ggml_nbytes(t)); std::mt19937 g(1234); for (auto & x : buf) x = (uint8_t) g();
++            ggml_backend_tensor_set(t, buf.data(), 0, buf.size()); continue;
++        }
+         if (t->type == GGML_TYPE_I32) {
+             continue;
+         }
+@@ -11116,6 +11138,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 2},  1025,   1, true, true,  8, 30, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1},  1025,  64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}));
+     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1}, 16384,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++    // E406 (local): the int8 QK^T tile path (GGML_FATTN_KQ8=1): D=256, GQA 6, q8_0 KV, 512-token batches
++    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1},  4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1},  4099, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1},  4096, 500, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+ 
+     // MLA shape: the V cache is a sub-view of the K cache, with quantized KV
+     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {8, 1},  113,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, true));
+@@ -11567,6 +11593,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+         }
+     }
+ 
++    // E681: Strata Flash-Next expert shapes with 512 experts (real routing via E681_IDS, random weight bytes via E681_RANDBYTES)
++    for (int bs : {512, 2048, 8192}) {
++        for (ggml_type t : {GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S}) {
++            test_cases.emplace_back(new test_mul_mat_id(t, GGML_TYPE_F32, 512, 10, false, 1280, bs, 2560));
++        }
++        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_IQ4_NL, GGML_TYPE_F32, 512, 10, false, 2560, bs, 640));
++    }
+     // qwen3-30b-a3b
+     for (int bs : {1, 4, 8, 32, 64, 128, 256, 512}) {
+         for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ4_XS}) {
+@@ -11626,6 +11659,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
+     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
++    // E406 (local): Qwen3.8-27B prefill attention on RDNA2 - D=256, 4 KV heads, GQA 6, ubatch 512, f16 and q8_0 KV
++    for (int kv406 : {16384, 65536}) {
++        for (ggml_type t406 : {GGML_TYPE_F16, GGML_TYPE_Q8_0}) {
++            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv406, 512, true, false, 0, 0, GGML_PREC_F32, t406, t406));
++        }
++    }
+ 
+     // sparse decode at long context
+     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 49152, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,    0));

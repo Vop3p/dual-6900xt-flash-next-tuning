@@ -10,8 +10,8 @@ Start with AGENTS.md for how to reproduce and what not to retry. English docs ar
 - [docs/windows-one-card.md](docs/windows-one-card.md): one RX 6900 XT under Windows 11: WDDM per-submission cost, VRAM reserve, PCIe share, prompt chunk, copy events, pictures.
 - [windows-rx6000/README.md](windows-rx6000/README.md): the "lazy pack": a PowerShell script that installs the official Strata Terminal and rdna2 engine package with the measured settings; optional GPU picture reader.
 - [docs/27b-llamacpp.md](docs/27b-llamacpp.md): dense Qwen3.8-27B on llama.cpp (`-sm tensor`, two cards): production state, patches, profiling.
-- [patches/llama.cpp/README.md](patches/llama.cpp/README.md): the eight llama.cpp patches (RDNA2 MMQ, int8 QK^T flash attention), build flags, measured effects.
-- [patches/strata/README.md](patches/strata/README.md): the on-demand DP prompt-read patch for Strata (on PR #5002 + dp-followups), its switches and measured effects.
+- [patches/llama.cpp/README.md](patches/llama.cpp/README.md): the eight llama.cpp patches (RDNA2 MMQ, int8 QK^T flash attention), build flags, measured effects; plus `extra-mmq-y-scalar-rdna2.diff` (wave-uniform MMQ activation reads, used by Strata since 11-06).
+- [patches/strata/README.md](patches/strata/README.md): Strata patches: the on-demand DP prompt read (0001, on PR #5002 + dp-followups) and the 11-06 kernel batch (0002: FP16 without widening, int8 hc copies, gfx1030 decode tables, fused SwiGLU+quantize on HIP), with switches and measured effects.
 - [docs/timeline.md](docs/timeline.md): every step with date and measured effect.
 - [docs/mechanisms.md](docs/mechanisms.md): mechanisms that limit speed on these cards, and mistakes made (so they are not repeated).
 
@@ -20,6 +20,7 @@ Start with AGENTS.md for how to reproduce and what not to retry. English docs ar
 - [data/linux-speed-steps.csv](data/linux-speed-steps.csv): prompt (4K / 32K / 128K) and decode tok/s at each production state.
 - [data/linux-breakdown-prompt-e505.csv](data/linux-breakdown-prompt-e505.csv), [data/linux-breakdown-decode-e505.csv](data/linux-breakdown-decode-e505.csv): per-phase time, stock vs tuned.
 - [data/linux-dp-0.2.10.csv](data/linux-dp-0.2.10.csv): layer pipeline vs on-demand DP prompt read on 0.2.10 (16K–128K prompt, 4K/32K decode).
+- [data/linux-steps-0.2.11.csv](data/linux-steps-0.2.11.csv): 11-06 steps 0.2.11 → MMQ activation reads → merged kernel batch, every run's value (long format).
 - [data/windows-steps.csv](data/windows-steps.csv): Windows one-card standard-benchmark steps.
 - [data/linux-modes-0.1.41-32k.csv](data/linux-modes-0.1.41-32k.csv): one card vs expert helper vs layer split.
 - [data/timeline-steps.en.csv](data/timeline-steps.en.csv), [data/timeline-steps.zh.csv](data/timeline-steps.zh.csv): every timeline step (English / Chinese).

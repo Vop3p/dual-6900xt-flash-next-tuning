@@ -1,0 +1,1168 @@
+diff --git a/include/strata/kernels/fused_gr.hpp b/include/strata/kernels/fused_gr.hpp
+index fb32021c..abcda76f 100644
+--- a/include/strata/kernels/fused_gr.hpp
++++ b/include/strata/kernels/fused_gr.hpp
+@@ -101,5 +101,11 @@ int fused_gr_variant();
+ /// runs `fused_gr_read_multi`.  Only for reads on a stream no other persistent read runs on concurrently (the verifier's).
+ void fused_gr_persist_init();
+ bool fused_gr_read_persist(const FusedGrArgs* a, int n_tok, void* stream);
++/// E693 opt-in STRATA_HC_PERSIST_Q8=1 (with STRATA_HC_PERSIST=1): the persistent read on int8 copies of the weights
++/// (down / inject: a scale per row and 128-column slice; up: a scale per row) - changes the output (~1e-3 relative).
++/// `_on`: the int8 kernel passed the start-up check on the current card.  `_prepare` (start-up, outside graph capture)
++/// makes one read's copies on the current card and adds their bytes; reads without copies keep the bf16 kernel.
++bool fused_gr_persist_q8_on();
++bool fused_gr_persist_q8_prepare(const uint16_t* w_down, const uint16_t* w_up, const uint16_t* w_inject, size_t& bytes);
+ 
+ }  // namespace strata::kernels
+diff --git a/include/strata/kernels/qsa_decode_attn.hpp b/include/strata/kernels/qsa_decode_attn.hpp
+index b8a748d6..dbe290ad 100644
+--- a/include/strata/kernels/qsa_decode_attn.hpp
++++ b/include/strata/kernels/qsa_decode_attn.hpp
+@@ -49,8 +49,11 @@ void qsa_decode_attn_step(const float* q, const QsaAttnPools& pools, const int32
+ /// [n_q, kStepCount], attn [n_q, n_head, 256]; scratch is `n_q` times the single-query size.
+ /// STRATA_PROMPT_ATTN_RDNA2=1 (HIP gfx103x, INT8 K/V): the prompt's n_q queries without the split and merge
+ /// (one block per query and KV head, online softmax); false when it does not apply (the caller keeps its path).
++/// =2 (E702): the dot2 score phase; it needs Q as FP16 (n_q x n_head x head_dim halves): q16_scratch when it is that
++/// large (the caller's free buffer), else a buffer kept here.
+ bool qsa_prompt_attn_rdna2(const float* q, const QsaAttnPools& pools, const int32_t* ids, const int32_t* steps,
+-                           int64_t cap, const QsaShapes& s, float* attn, int64_t n_q, void* stream);
++                           int64_t cap, const QsaShapes& s, float* attn, int64_t n_q, void* stream,
++                           void* q16_scratch = nullptr, size_t q16_bytes = 0);
+ void qsa_decode_attn_batch(const float* q, const QsaAttnPools& pools, const int32_t* ids, const int32_t* steps,
+                            int64_t cap, const QsaShapes& s, float* scratch, float* attn, int64_t n_q, void* stream);
+ 
+diff --git a/include/strata/prefill/gemm.hpp b/include/strata/prefill/gemm.hpp
+index d977a86a..3eacdf5d 100644
+--- a/include/strata/prefill/gemm.hpp
++++ b/include/strata/prefill/gemm.hpp
+@@ -64,6 +64,16 @@ public:
+     /// and bf16() / f16() / native() run the GEMM with FP16 out (rocBLAS's tuned kernels there), widened in place in
+     /// Y's own rows.  Off (default): every call is what it was.  Set by Prefill::init, together with set_act_f16.
+     void set_f16_io(bool on) { f16_io_ = on; }
++    /// E688 (STRATA_F16_NOWIDEN): the next FP16-out product of all n_full columns in one GEMM leaves Y as FP16 (each
++    /// row's halves at its start, 2 * ldy halves a row) instead of widening it; take_kept_f16 says whether it did and
++    /// clears the request (a sliced product widens as before)
++    void keep_f16_once(int64_t n_full) { keep_n_ = n_full; kept_f16_ = false; }
++    bool take_kept_f16() { const bool k = kept_f16_; keep_n_ = 0; kept_f16_ = false; return k; }
++    /// Waitlist E688b (STRATA_F16_NOWIDEN): the next native()/bf16() product with N == n_full leaves EVERY row slice's
++    /// FP16 output unwidened (slice r0's halves at row t from half t * 2 * ldy + 2 * r0); take_kept_rows gives the slice
++    /// width (N when it ran unsliced) or 0 when that product took a path that writes FP32 (MMQ, padded, no FP16 I/O)
++    void keep_f16_slices_once(int64_t n_full) { keep_all_n_ = n_full; kept_rows_ = 0; }
++    int64_t take_kept_rows() { const int64_t r = kept_rows_; keep_all_n_ = 0; kept_rows_ = 0; return r; }
+ 
+     /// Caller-owned buffers only: the scratch and workspace moved (the prompt path laid its buffers out again).
+     void rebind(uint16_t* scratch, int64_t scratch_elems, void* workspace, size_t ws_bytes);
+@@ -113,6 +123,10 @@ private:
+     void* hipblaslt_state_ = nullptr;
+     void* rocblas_state_ = nullptr;   // HIP: the rocBLAS solution table of f16_inplace (STRATA_ROCBLAS_TUNING)
+     bool f16_io_ = false;
++    int64_t keep_n_ = 0;      // E688: keep_f16_once's column count (0 = widen)
++    bool kept_f16_ = false;
++    int64_t keep_all_n_ = 0, kept_rows_ = 0;   // E688b
++    bool skip_widen_ = false;
+     /// cuBLAS 12 answers the default FP16 algorithm of a few (N, K) shapes with CUBLAS_STATUS_INTERNAL_ERROR once
+     /// another CUDA device in the process has initialized its context (issue #1650, Turing + Pascal).  A fixed
+     /// algorithm (ALGO2) survives that state, but is markedly slower for the wide shapes, so only the shapes that
+diff --git a/include/strata/prefill/kernels.hpp b/include/strata/prefill/kernels.hpp
+index 07182c10..cf1ec2b9 100644
+--- a/include/strata/prefill/kernels.hpp
++++ b/include/strata/prefill/kernels.hpp
+@@ -22,7 +22,7 @@ void gr_norm_rs(const float* R, const float* w_norm, float eps, float* rs, uint1
+                 uint16_t* xn16_lo = nullptr, int64_t ldx = 0, bool f16img = false);   // ldx: xn16's token stride (0 = 10240)
+ /// gr_mix with xn recomputed from R, rs and w_norm exactly as gr_norm computes it (the same bits).
+ void gr_mix_r(const float* R, const float* rs, const float* w_norm, const float* gated, float* mixed, uint16_t* mixed16,
+-              int64_t T, void* stream, uint16_t* mixed_h = nullptr, uint16_t* mixed16_lo = nullptr);
++              int64_t T, void* stream, uint16_t* mixed_h = nullptr, uint16_t* mixed16_lo = nullptr, bool gated_f16 = false);
+ /// F-2: gr_write, then gr_norm_rs of the next half (its norm weights) over the rows just written - the same bits as
+ /// the two calls, without reading R back.
+ /// S23 (opt-in STRATA_HC_UPMIX=1): the up projection (lo16 x w_up^T, BF16, FP32 accumulate) with gr_mix_r as its
+@@ -60,7 +60,11 @@ void gr_broadcast(const float* e, float* R, int64_t T, void* stream);
+ void gdn_gates(const float* ab, const float* dt, const float* ssm_a, float* gate, float* beta, int64_t T, void* stream);
+ /// The 4-tap causal conv + SiLU over the chunk (history [C][3] in, updated to the chunk's last three inputs), then
+ /// the L2 norm of the q and k heads of every token.  h: [T, C].
+-void gdn_conv(float* history, const float* qkv, const float* conv_w, float* h, int64_t T, float eps, void* stream);
++/// E688b: f16_rows > 0 = qkv is attn_qkv's product left FP16 in row slices of that many columns (STRATA_F16_NOWIDEN);
++/// only where gdn_conv_f16_ok() (the conv kernels that read it: CONVL2=1, not serial, not chunked)
++void gdn_conv(float* history, const float* qkv, const float* conv_w, float* h, int64_t T, float eps, void* stream,
++              int f16_rows = 0);
++bool gdn_conv_f16_ok();
+ /// The recurrence over the chunk, state in registers; y16[t] = rmsnorm(o) * gamma * sigmoid(z) in FP16 (what the
+ /// out projection reads); y is FP32 scratch.
+ void gdn_recurrence(float* state, const float* h, const float* gate, const float* beta, const float* z,
+diff --git a/src/core/verify.cpp b/src/core/verify.cpp
+index 47977c15..3d58ce76 100644
+--- a/src/core/verify.cpp
++++ b/src/core/verify.cpp
+@@ -938,6 +938,25 @@ bool Verifier::init(const WeightTable& wt, const ModelGeometry& g, SessionState&
+         err = "verify: the stage's layer range or its hand-off buffers are wrong";
+         return false;
+     }
++    if (strata::kernels::fused_gr_persist_q8_on()) {   // E693 STRATA_HC_PERSIST_Q8=1: this stage's int8 hc copies (once per card)
++        size_t qbytes = 0;
++        int made = 0;
++        for (int64_t l = lb_; l < le_; ++l) {
++            const LayerView v(wt, l);
++            for (const char* pfx : {"hc_attn_", "hc_ffn_"}) {
++                const WeightRef* wd = v.get((std::string(pfx) + "down.weight").c_str());
++                const WeightRef* wu = v.get((std::string(pfx) + "up.weight").c_str());
++                const WeightRef* wi = v.get((std::string(pfx) + "inject.weight").c_str());
++                if (wd == nullptr || wu == nullptr || wd->q8_scale != nullptr || wu->q8_scale != nullptr) continue;
++                if (strata::kernels::fused_gr_persist_q8_prepare((const uint16_t*) wd->data, (const uint16_t*) wu->data,
++                                                                 wi != nullptr ? (const uint16_t*) wi->data : nullptr, qbytes))
++                    ++made;
++            }
++        }
++        if (qbytes > 0)
++            std::fprintf(stderr, "strata verify: CUDA%d: STRATA_HC_PERSIST_Q8: %d hc reads of layers %lld-%lld as int8 copies, "
++                                 "%zu MiB\n", device_, made, (long long) lb_, (long long) le_ - 1, qbytes >> 20);
++    }
+     const WeightRef* wo = wt.find("output.weight");
+     if (wo == nullptr) { err = "verify: output.weight is missing"; return false; }
+     n_vocab_ = wo->ne1;
+diff --git a/src/kernels/cuda/fused_gr.cu b/src/kernels/cuda/fused_gr.cu
+index 09da0ec8..27c26cca 100644
+--- a/src/kernels/cuda/fused_gr.cu
++++ b/src/kernels/cuda/fused_gr.cu
+@@ -26,6 +26,7 @@
+ #include <cstring>
+ #include <random>
+ #include <string>
++#include <map>
+ #include <vector>
+ 
+ namespace strata::kernels {
+@@ -3328,7 +3329,58 @@ struct PArgs {
+     unsigned long long timeout_ticks;   // s_memrealtime ticks (100 MHz) a barrier waits before it aborts the read
+     double* partd;      // STRATA_HC_PERSIST=3 (a reference only): the partial dots and sums of squares in double
+     double* sspd;
++    // E693 STRATA_HC_PERSIST_Q8=1: int8 copies of this read's weights (the Q8 kernel only).  qd [NR][D] (rows LR.. the
++    // inject rows) with one fp32 scale per (row, 128-column slice) in sd [NR][NB]; qu [D][LR] with one scale per row in su [D]
++    const int8_t* qd;
++    const float* sd;
++    const int8_t* qu;
++    const float* su;
++    // E708 STRATA_HC_PERSIST_Q8=2: the same codes on Q8_0's grid instead - one fp16 scale (bits) per 32 values: sdh [NR][D / 32],
++    // suh [D][LR / 32] (the scales above stay null)
++    const uint16_t* sdh;
++    const uint16_t* suh;
+ };
++// E693: 8 int8 codes (two 32-bit words) against 8 floats
++__device__ __forceinline__ float dot8q(const unsigned lo, const unsigned hi, const float* x) {
++    const float4* x4 = reinterpret_cast<const float4*>(x);
++    const float4 x0 = x4[0], x1 = x4[1];
++    float acc = 0.0f;
++    acc = fmaf((float) (int8_t) (lo), x0.x, acc);       acc = fmaf((float) (int8_t) (lo >> 8), x0.y, acc);
++    acc = fmaf((float) (int8_t) (lo >> 16), x0.z, acc); acc = fmaf((float) (int8_t) (lo >> 24), x0.w, acc);
++    acc = fmaf((float) (int8_t) (hi), x1.x, acc);       acc = fmaf((float) (int8_t) (hi >> 8), x1.y, acc);
++    acc = fmaf((float) (int8_t) (hi >> 16), x1.z, acc); acc = fmaf((float) (int8_t) (hi >> 24), x1.w, acc);
++    return acc;
++}
++// E693: rows of bf16 -> int8 codes, one scale (amax / 127) per `len` contiguous values; a block per (segment, row), a
++// thread per value (len <= 320, a multiple of 32).  rint is round-half-even (the microbenchmark's lrintf).
++__global__ void q8_rows_kernel(const uint16_t* src, int ld_src, int len, int8_t* dst, int ld_dst, float* scl, int nseg) {
++    __shared__ float wmax[16];
++    const int seg = blockIdx.x, row = blockIdx.y, t = threadIdx.x;
++    const float x = __uint_as_float((unsigned) src[(size_t) row * ld_src + (size_t) seg * len + t] << 16);
++    float m = fabsf(x);
++    for (int o = 16; o > 0; o >>= 1) m = fmaxf(m, shfl_xor_persist(m, o));
++    if ((t & 31) == 0) wmax[t >> 5] = m;
++    __syncthreads();
++    float amax = 0.0f;
++    for (int w = 0; w < len / 32; ++w) amax = fmaxf(amax, wmax[w]);
++    const float sc = amax > 0.0f ? amax / 127.0f : 1.0f;
++    dst[(size_t) row * ld_dst + (size_t) seg * len + t] = (int8_t) fmaxf(-127.0f, fminf(127.0f, rintf(x / sc)));
++    if (t == 0) scl[(size_t) row * nseg + seg] = sc;
++}
++// E708: rows of bf16 -> int8 codes on Q8_0's grid: one fp16 scale d = amax / 127 per 32 contiguous values, q = round(x / d)
++// with the fp16-rounded d (ggml's reference rounding); a block (one warp) per (32-value group, row)
++__global__ void q8g32_rows_kernel(const uint16_t* src, int ld_src, int8_t* dst, int ld_dst, uint16_t* scl, int nseg) {
++    const int seg = blockIdx.x, row = blockIdx.y, t = threadIdx.x;
++    const float x = __uint_as_float((unsigned) src[(size_t) row * ld_src + (size_t) seg * 32 + t] << 16);
++    float m = fabsf(x);
++    for (int o = 16; o > 0; o >>= 1) m = fmaxf(m, shfl_xor_persist(m, o));
++    const __half dh = __float2half(m / 127.0f);
++    const float d = __half2float(dh);
++    const float inv = d > 0.0f ? 1.0f / d : 0.0f;
++    dst[(size_t) row * ld_dst + (size_t) seg * 32 + t] = (int8_t) fmaxf(-127.0f, fminf(127.0f, rintf(x * inv)));
++    if (t == 0) scl[(size_t) row * nseg + seg] = __half_as_ushort(dh);
++}
++__device__ __forceinline__ float h2f_bits(uint16_t b) { return __half2float(__ushort_as_half(b)); }
+ // Returns false when the read was aborted: a block waited longer than `ticks` (the 80 blocks were not all resident - the
+ // start-up check finds that out by running every T with a short timeout) or another block aborted.  Then every block
+ // leaves the kernel; the outputs are not written completely and bar[48] stays set until the host clears the words.
+@@ -3413,8 +3465,9 @@ __device__ __forceinline__ double dot8d(const uint4 w, const float* x) {
+     }
+     return acc;
+ }
+-template <int T, bool DP = false>
++template <int T, bool DP = false, int Q8 = 0>   // Q8: 0 bf16, 1 int8 (E693 scales), 2 int8 on Q8_0's grid (E708)
+ __global__ void __launch_bounds__(THREADS) persist_kernel(PArgs f) {
++    static_assert(!(DP && Q8), "the double reference reads the bf16 weights");
+     using A = typename std::conditional<DP, double, float>::type;
+     __shared__ __align__(16) float xs[T][SL];
+     __shared__ __align__(16) float lo[T][LR];
+@@ -3451,6 +3504,28 @@ __global__ void __launch_bounds__(THREADS) persist_kernel(PArgs f) {
+     const int hw = tid >> 4, hl = tid & 15;
+     const bool inj = a0.w_inject != nullptr;
+     const int nrows = inj ? NR : LR;
++    if constexpr (Q8) {   // E693: 16 int8 codes a lane, 8 lanes a row, 32 rows a pass
++        const int hw8 = tid >> 3, h8 = tid & 7;
++#pragma unroll 2
++        for (int r = hw8; r < nrows; r += 32) {
++            const uint4 w = __ldg(reinterpret_cast<const uint4*>(f.qd + (size_t) r * D + col0) + h8);
++            float sc;   // E708 (Q8 2): the lane pair h8 / 2 shares one 32-value group
++            if constexpr (Q8 == 2) sc = h2f_bits(__ldg(f.sdh + (size_t) r * (D / 32) + (col0 >> 5) + (h8 >> 1)));
++            else sc = __ldg(f.sd + (size_t) r * NB + b);
++            float acc[T];
++#pragma unroll
++            for (int k = 0; k < T; ++k)
++                acc[k] = (dot8q(w.x, w.y, &xs[k][h8 * 16]) + dot8q(w.z, w.w, &xs[k][h8 * 16 + 8])) * sc;
++#pragma unroll
++            for (int k = 0; k < T; ++k) {
++#pragma unroll
++                for (int o = 4; o > 0; o >>= 1) acc[k] += shfl_xor_persist(acc[k], o);
++            }
++#pragma unroll
++            for (int k = 0; k < T; ++k)
++                if (h8 == k) f.part[((size_t) k * NR + r) * NB + b] = acc[k];
++        }
++    } else
+ #pragma unroll 3
+     for (int r = hw; r < nrows; r += 16) {
+         const uint16_t* wrow = r < LR ? a0.w_down + (size_t) r * D : a0.w_inject + (size_t) (r - LR) * D;
+@@ -3534,6 +3609,39 @@ __global__ void __launch_bounds__(THREADS) persist_kernel(PArgs f) {
+         A v[T];
+ #pragma unroll
+         for (int k = 0; k < T; ++k) v[k] = 0;
++        if constexpr (Q8 == 2) {   // E708: the thread's 160 int8 codes = five 32-value groups, one fp16 scale each
++            const uint4* q4 = reinterpret_cast<const uint4*>(f.qu + (size_t) ui * LR + uh * 160);
++            uint4 w[10];
++#pragma unroll
++            for (int q = 0; q < 10; ++q) w[q] = __ldg(q4 + q);
++            const uint16_t* sh = f.suh + (size_t) ui * (LR / 32) + uh * 5;
++#pragma unroll
++            for (int gq = 0; gq < 5; ++gq) {
++                const float sc = h2f_bits(__ldg(sh + gq));
++#pragma unroll
++                for (int k = 0; k < T; ++k) {
++                    const float* lk = &lo[k][uh * 160] + gq * 32;
++                    const float s = (dot8q(w[2 * gq].x, w[2 * gq].y, lk) + dot8q(w[2 * gq].z, w[2 * gq].w, lk + 8)) +
++                                    (dot8q(w[2 * gq + 1].x, w[2 * gq + 1].y, lk + 16) + dot8q(w[2 * gq + 1].z, w[2 * gq + 1].w, lk + 24));
++                    v[k] = fmaf(s, sc, v[k]);
++                }
++            }
++        } else if constexpr (Q8 == 1) {   // E693: the thread's 160 int8 codes in ten uint4 loads, one scale a row
++            const uint4* q4 = reinterpret_cast<const uint4*>(f.qu + (size_t) ui * LR + uh * 160);
++            uint4 w[10];
++#pragma unroll
++            for (int q = 0; q < 10; ++q) w[q] = __ldg(q4 + q);
++#pragma unroll
++            for (int q = 0; q < 10; ++q)
++#pragma unroll
++                for (int k = 0; k < T; ++k) {
++                    v[k] += dot8q(w[q].x, w[q].y, &lo[k][uh * 160] + q * 16);
++                    v[k] += dot8q(w[q].z, w[q].w, &lo[k][uh * 160] + q * 16 + 8);
++                }
++            const float sc = __ldg(f.su + ui);
++#pragma unroll
++            for (int k = 0; k < T; ++k) v[k] *= sc;
++        } else
+ #pragma unroll 1
+         for (int j0 = 0; j0 < 20; j0 += 5) {   // five chunks a batch (all twenty at once costs registers)
+             uint4 w[5];
+@@ -3581,20 +3689,34 @@ struct DevState {
+     unsigned* bar = nullptr;
+     int max_t = 0;      // 0: off on this card
+     bool tried = false;
++    bool q8_ok = false; // E693: the int8 kernel passed the start-up check on this card
+ };
+ DevState g_dev[64];
++// E693 STRATA_HC_PERSIST_Q8: one read's int8 copies, keyed by its bf16 w_down (the verifier's weights on this card)
++struct Q8Set {
++    const uint16_t* wu = nullptr;
++    const uint16_t* wi = nullptr;
++    int8_t* qd = nullptr;
++    float* sd = nullptr;
++    int8_t* qu = nullptr;
++    float* su = nullptr;
++    uint16_t* sdh = nullptr;   // E708 (mode 2): fp16 scale bits per 32 values
++    uint16_t* suh = nullptr;
++    int mode = 1;
++};
++std::map<const uint16_t*, Q8Set> g_q8[64];
+ using KFn = void (*)(PArgs);
+-template <bool DP>
++template <bool DP, int Q8 = 0>
+ KFn kernel_t(int T) {
+     switch (T) {
+-        case 1: return persist_kernel<1, DP>;
+-        case 2: return persist_kernel<2, DP>;
+-        case 3: return persist_kernel<3, DP>;
+-        case 4: return persist_kernel<4, DP>;
+-        case 5: return persist_kernel<5, DP>;
+-        case 6: return persist_kernel<6, DP>;
+-        case 7: return persist_kernel<7, DP>;
+-        case 8: return persist_kernel<8, DP>;
++        case 1: return persist_kernel<1, DP, Q8>;
++        case 2: return persist_kernel<2, DP, Q8>;
++        case 3: return persist_kernel<3, DP, Q8>;
++        case 4: return persist_kernel<4, DP, Q8>;
++        case 5: return persist_kernel<5, DP, Q8>;
++        case 6: return persist_kernel<6, DP, Q8>;
++        case 7: return persist_kernel<7, DP, Q8>;
++        case 8: return persist_kernel<8, DP, Q8>;
+     }
+     return nullptr;
+ }
+@@ -3612,16 +3734,71 @@ constexpr unsigned long long kTicksRun = 4000000000ULL, kTicksCheck = 100000000U
+ #else
+ constexpr unsigned long long kTicksRun = 200000000ULL, kTicksCheck = 5000000ULL;
+ #endif
+-void launch(const FusedGrArgs* a, int n_tok, const DevState& st, cudaStream_t s, unsigned long long ticks) {
++void launch(const FusedGrArgs* a, int n_tok, const DevState& st, cudaStream_t s, unsigned long long ticks,
++            const Q8Set* q8 = nullptr) {
+     PArgs f;
+     for (int t = 0; t < n_tok; ++t) f.a[t] = a[t];
+     f.part = st.part; f.ssp = st.ssp; f.bar = st.bar; f.partd = st.partd; f.sspd = st.sspd; f.timeout_ticks = ticks;
++    f.qd = nullptr; f.sd = nullptr; f.qu = nullptr; f.su = nullptr; f.sdh = nullptr; f.suh = nullptr;
++    if (q8 != nullptr) {
++        f.qd = q8->qd; f.sd = q8->sd; f.qu = q8->qu; f.su = q8->su; f.sdh = q8->sdh; f.suh = q8->suh;
++        if (q8->mode == 2) kernel_t<false, 2>(n_tok)<<<NB, THREADS, 0, s>>>(f);
++        else kernel_t<false, 1>(n_tok)<<<NB, THREADS, 0, s>>>(f);
++        return;
++    }
+     kernel_for(n_tok)<<<NB, THREADS, 0, s>>>(f);
+ }
+ bool env_on() {
+     static const bool on = [] { const char* v = std::getenv("STRATA_HC_PERSIST"); return v != nullptr && std::atoi(v) != 0; }();
+     return on;
+ }
++// STRATA_HC_PERSIST_Q8: 1 = E693 scales (fp32, one per 128 columns of down / inject, one per up row); 2 = E708 Q8_0's grid
++// (one fp16 scale per 32 values everywhere, the error of STRATA_HC_Q8's Q8_0 copies)
++int q8_mode() {
++    static const int m = [] { const char* v = std::getenv("STRATA_HC_PERSIST_Q8"); const int x = v != nullptr ? std::atoi(v) : 0; return x == 2 ? 2 : (x != 0 ? 1 : 0); }();
++    return m;
++}
++bool q8_env() {
++    return q8_mode() != 0 && env_on() && !dp_on();
++}
++// E693: int8 copies of one read's weights on the current card (synchronous: start-up, outside graph capture)
++bool q8_make(int dev, const uint16_t* wd, const uint16_t* wu, const uint16_t* wi, size_t& bytes) {
++    if (g_q8[dev].count(wd) != 0) return true;
++    Q8Set q;
++    q.wu = wu; q.wi = wi; q.mode = q8_mode();
++    const size_t nd = (size_t) NR * D, nu = (size_t) D * LR;
++    const size_t sdb = q.mode == 2 ? (size_t) NR * (D / 32) * 2 : (size_t) NR * NB * 4;
++    const size_t sub = q.mode == 2 ? (size_t) D * (LR / 32) * 2 : (size_t) D * 4;
++    bool ok = cudaMalloc((void**) &q.qd, nd) == cudaSuccess && cudaMalloc((void**) &q.qu, nu) == cudaSuccess;
++    if (ok) ok = q.mode == 2 ? (cudaMalloc((void**) &q.sdh, sdb) == cudaSuccess && cudaMalloc((void**) &q.suh, sub) == cudaSuccess)
++                             : (cudaMalloc((void**) &q.sd, sdb) == cudaSuccess && cudaMalloc((void**) &q.su, sub) == cudaSuccess);
++    if (ok && q.mode == 2) {
++        q8g32_rows_kernel<<<dim3(D / 32, LR), 32>>>(wd, D, q.qd, D, q.sdh, D / 32);
++        if (wi != nullptr) q8g32_rows_kernel<<<dim3(D / 32, HC), 32>>>(wi, D, q.qd + (size_t) LR * D, D, q.sdh + (size_t) LR * (D / 32), D / 32);
++        q8g32_rows_kernel<<<dim3(LR / 32, D), 32>>>(wu, LR, q.qu, LR, q.suh, LR / 32);
++        ok = cudaDeviceSynchronize() == cudaSuccess;
++    } else if (ok) {
++        q8_rows_kernel<<<dim3(NB, LR), SL>>>(wd, D, SL, q.qd, D, q.sd, NB);
++        if (wi != nullptr) q8_rows_kernel<<<dim3(NB, HC), SL>>>(wi, D, SL, q.qd + (size_t) LR * D, D, q.sd + (size_t) LR * NB, NB);
++        q8_rows_kernel<<<dim3(1, D), LR>>>(wu, LR, LR, q.qu, LR, q.su, 1);
++        ok = cudaDeviceSynchronize() == cudaSuccess;
++    }
++    if (!ok) {
++        cudaGetLastError();
++        cudaFree(q.qd); cudaFree(q.sd); cudaFree(q.qu); cudaFree(q.su); cudaFree(q.sdh); cudaFree(q.suh);
++        return false;
++    }
++    bytes += nd + nu + sdb + sub;
++    g_q8[dev][wd] = q;
++    return true;
++}
++void q8_drop(int dev, const uint16_t* wd) {
++    auto it = g_q8[dev].find(wd);
++    if (it == g_q8[dev].end()) return;
++    cudaFree(it->second.qd); cudaFree(it->second.sd); cudaFree(it->second.qu); cudaFree(it->second.su);
++    cudaFree(it->second.sdh); cudaFree(it->second.suh);
++    g_q8[dev].erase(it);
++}
+ }  // namespace hcp
+ }  // namespace
+ 
+@@ -3690,10 +3867,10 @@ void fused_gr_persist_init() {
+     cudaMemcpy(dwd, wd.data(), wd.size() * 2, cudaMemcpyHostToDevice);
+     cudaMemcpy(dwu, wu.data(), wu.size() * 2, cudaMemcpyHostToDevice);
+     cudaMemcpy(dwi, wi.data(), wi.size() * 2, cudaMemcpyHostToDevice);
+-    double worst = 0.0;
++    double worst = 0.0, worst_q8 = 0.0;
+     int bad_t = 0, timeouts = 0;
+     // 0: the read agrees with the default read; 1: a barrier timed out (not resident); 2: wrong or a device error
+-    auto check = [&](int T) -> int {
++    auto check = [&](int T, bool q8) -> int {
+         FusedGrArgs a[kFusedGrMaxT];
+         for (int t = 0; t < T; ++t) {
+             a[t] = FusedGrArgs{};
+@@ -3710,7 +3887,7 @@ void fused_gr_persist_init() {
+             cudaMemset(dio, 0xff, (size_t) TM * HC * 4);
+             cudaDeviceSynchronize();
+             if (which == 0) fused_gr_read_multi(a, T, dxn, nullptr);
+-            else hcp::launch(a, T, st, nullptr, hcp::kTicksCheck);
++            else hcp::launch(a, T, st, nullptr, hcp::kTicksCheck, q8 ? &hcp::g_q8[dev].at(dwd) : nullptr);
+             if (cudaDeviceSynchronize() != cudaSuccess) { cudaGetLastError(); return 2; }
+             if (which == 1) {
+                 unsigned abort_word = 0;
+@@ -3734,16 +3911,28 @@ void fused_gr_persist_init() {
+             md = std::fmax(md, std::fabs((double) out[1][i] - out[0][i]));
+         }
+         const double rel = md / (mref > 0 ? mref : 1.0);
++        if (q8) { worst_q8 = std::fmax(worst_q8, rel); return finite && rel < 2e-2 ? 0 : 2; }
+         worst = std::fmax(worst, rel);
+         return finite && rel < 1e-4 ? 0 : 2;
+     };
+     int max_t = 0;
+     for (int T = 1; T <= kFusedGrMaxT && ok; ++T) {
+-        const int r = check(T);
++        const int r = check(T, false);
+         if (r == 1) ++timeouts; else if (r == 2) { bad_t = T; ok = false; }
+         if (r != 0) break;
+         max_t = T;
+     }
++    // E693 STRATA_HC_PERSIST_Q8: the int8 kernel on int8 copies of the same random weights, against the default (bf16) read;
++    // bounded by the weight rounding (~1e-3 measured), so the bar is 2e-2
++    bool q8_ok = false;
++    if (ok && max_t > 0 && hcp::q8_env()) {
++        size_t qb = 0;
++        q8_ok = hcp::q8_make(dev, dwd, dwu, dwi, qb);
++        for (int T = 1; T <= max_t && q8_ok; ++T) q8_ok = check(T, true) == 0;
++        hcp::q8_drop(dev, dwd);
++        cudaMemset(st.bar, 0, 64 * sizeof(unsigned));
++        cudaDeviceSynchronize();
++    }
+     cudaFree(dR); cudaFree(dbo); cudaFree(dinj); cudaFree(dwn); cudaFree(dxn); cudaFree(dlo); cudaFree(drs);
+     cudaFree(dio); cudaFree(dmix); cudaFree(dwd); cudaFree(dwu); cudaFree(dwi);
+     cudaMemset(st.bar, 0, 64 * sizeof(unsigned));
+@@ -3760,6 +3949,13 @@ void fused_gr_persist_init() {
+         return;
+     }
+     st.max_t = max_t;
++    st.q8_ok = q8_ok;
++    if (hcp::q8_env())
++        std::fprintf(stderr, "strata hc: CUDA%d: STRATA_HC_PERSIST_Q8=%d: %s (int8 weights%s, max relative difference %.3g "
++                             "against the bf16 default read)\n", dev, hcp::q8_mode(),
++                     q8_ok ? "the persistent read takes int8 copies of the verifier's hc weights" : "OFF here, the check failed",
++                     hcp::q8_mode() == 2 ? " on Q8_0's grid, an fp16 scale per 32 values" : ", an fp32 scale per 128 columns / up row",
++                     worst_q8);
+     std::fprintf(stderr, "strata hc: CUDA%d: STRATA_HC_PERSIST=1: the verifier's hyper-connection read runs as one "
+                          "persistent kernel (80 blocks on %d multiprocessors, up to %d tokens; %d token counts timed out in "
+                          "the check; checked against the default read, max relative difference %.2g)\n", dev, mp, max_t,
+@@ -3776,12 +3972,30 @@ bool fused_gr_read_persist(const FusedGrArgs* a, int n_tok, void* stream) {
+     if (a[0].q8_down != nullptr || a[0].q8_up != nullptr) return false;    // STRATA_HC_Q8: the default read
+     for (int t = 0; t < n_tok; ++t)
+         if (a[t].q8_mixed != nullptr) return false;                         // STRATA_QFUSE: the default read
+-    hcp::launch(a, n_tok, st, (cudaStream_t) stream, hcp::kTicksRun);
++    const hcp::Q8Set* q8 = nullptr;
++    if (st.q8_ok) {
++        auto it = hcp::g_q8[dev].find(a[0].w_down);
++        if (it != hcp::g_q8[dev].end() && it->second.wu == a[0].w_up && it->second.wi == a[0].w_inject) q8 = &it->second;
++    }
++    hcp::launch(a, n_tok, st, (cudaStream_t) stream, hcp::kTicksRun, q8);
+     return true;
+ }
++bool fused_gr_persist_q8_on() {
++    int dev = 0;
++    cudaGetDevice(&dev);
++    return hcp::q8_env() && dev >= 0 && dev < 64 && hcp::g_dev[dev].q8_ok;
++}
++bool fused_gr_persist_q8_prepare(const uint16_t* w_down, const uint16_t* w_up, const uint16_t* w_inject, size_t& bytes) {
++    int dev = 0;
++    cudaGetDevice(&dev);
++    if (!fused_gr_persist_q8_on() || w_down == nullptr || w_up == nullptr) return false;
++    return hcp::q8_make(dev, w_down, w_up, w_inject, bytes);
++}
+ #else
+ void fused_gr_persist_init() {}
+ bool fused_gr_read_persist(const FusedGrArgs*, int, void*) { return false; }
++bool fused_gr_persist_q8_on() { return false; }
++bool fused_gr_persist_q8_prepare(const uint16_t*, const uint16_t*, const uint16_t*, size_t&) { return false; }
+ #endif
+ 
+ }  // namespace strata::kernels
+diff --git a/src/kernels/cuda/iq_kernels.cu b/src/kernels/cuda/iq_kernels.cu
+index 30531836..e9332e8c 100644
+--- a/src/kernels/cuda/iq_kernels.cu
++++ b/src/kernels/cuda/iq_kernels.cu
+@@ -6357,7 +6357,15 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
+ #else
+     // CUDA: the AMD layouts launch a block row per possible group, so a call that strides (a verify window's PCIe
+     // call, grid_groups 1..cap) keeps the CUDA layout: V100, 0 groups 11.3 vs 6.5 us, 1 group of 2 29.6 vs 21.3
+-    const int em0 = (grid_groups > 0 && grid_groups < cap_groups) ? 0 : exp_mode();
++    const int em0_all = (grid_groups > 0 && grid_groups < cap_groups) ? 0 : exp_mode();
++    // Waitlist B (E698, STRATA_EXP_TABLE=1, opt-in): the layout per format on gfx1030 where the sweep found one faster -
++    // gate/up IQ2_S / IQ3_S mode 8 (G 20 x T 1: 58.2 -> 46.5 / 55.5 -> 45.9 us; G 10 x T 2 -35.2 / 33.3 vs 38.4 / 36.4),
++    // the down projection Q2_0 mode 4 (42.3 -> 26.9 us), every other format the card's default.  All bitwise equal to
++    // mode 0 (native_expert_bench).  A strided call (above) and an explicit STRATA_EXP_MODE keep their layout.
++    static const bool exp_table = [] { const char* v = std::getenv("STRATA_EXP_TABLE"); return v != nullptr && v[0] == '1' &&
++                                                                     std::getenv("STRATA_EXP_MODE") == nullptr; }();
++    const bool tabled = exp_table && g_exp_mode < 0 && em0_all == 0 && !(grid_groups > 0 && grid_groups < cap_groups);
++    const int em0 = tabled && (L.gu_type == 22 || L.gu_type == 21) ? 8 : em0_all;
+ #endif
+ #endif
+ #if STRATA_EXP_LAYOUTS
+@@ -6487,7 +6495,11 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
+     }
+ #endif
+ #if STRATA_EXP_LAYOUTS
++#if !defined(STRATA_HIP_GFX906)
++    const int em0d = tabled ? (L.d_type == 42 ? 4 : 0) : sm75_down_em(em0, cap_groups);   // E698 table: the down mode per format
++#else
+     const int em0d = sm75_down_em(em0, cap_groups);
++#endif
+     int dev_d = 0;
+     cudaGetDevice(&dev_d);
+     // gfx1151: the LDS down kernel is slower than the CUDA layout for IQ4_NL (86 vs 63 us, 24 groups) and faster for Q2_0 (-18%)
+diff --git a/src/kernels/cuda/native_mmvq.cu b/src/kernels/cuda/native_mmvq.cu
+index 21d3392f..fd1d24f0 100644
+--- a/src/kernels/cuda/native_mmvq.cu
++++ b/src/kernels/cuda/native_mmvq.cu
+@@ -1548,6 +1548,15 @@ void launch_multi_n(const void* weights, const void* x_q8_1, float* y, int n_in,
+     const auto* w = static_cast<const typename F::Block*>(weights);
+     const auto* x = static_cast<const Q81Block*>(x_q8_1);
+     if (b6_launch<F, NCOLS>(w, x, y, n_in, n_out, s)) return;   // STRATA_B6_MMVQ_ROWS
++    // Waitlist A (STRATA_MMVQ_NW1=1, opt-in, not bitwise: one warp a row reduces in another order, rel. diff < 1e-5):
++    // the decode window's K <= 4096 shapes (qkv / gate / q / shared expert, K = 2560) one warp and one row a block -
++    // E429 (gfx1030, cold weights): 1.06-1.73x over the 4-warp 2-row default at T = 2..4, the default stays for K = 6144
++    static const bool nw1 = [] { const char* v = std::getenv("STRATA_MMVQ_NW1"); return v != nullptr && v[0] == '1'; }();
++    if (nw1 && n_in <= 4096 && n_in / F::DIV >= 1) {
++        launch_pdl(native_mmvq_multi_kernel<F, NCOLS, 1, 1, false, false>, dim3(unsigned(n_out)), dim3(WARP, 1), 0, s, w, x, y,
++                   n_in, n_out, (const typename F::Block*) nullptr, (float*) nullptr);
++        return;
++    }
+     if (!g_multi_exact) {
+         constexpr int NW = NCOLS <= 4 ? 4 : 2;
+         const unsigned blocks = unsigned((std::size_t(n_out) + 1) / 2);
+diff --git a/src/kernels/cuda/qsa_decode_attn.cu b/src/kernels/cuda/qsa_decode_attn.cu
+index f87e331e..0b214c93 100644
+--- a/src/kernels/cuda/qsa_decode_attn.cu
++++ b/src/kernels/cuda/qsa_decode_attn.cu
+@@ -701,14 +701,23 @@ __global__ void __launch_bounds__(THREADS) attn_chunk_kernel_pre75(const float*
+ // scratch and no merge pass, and a value phase with 4 dimensions per thread.  The decode path splits a query's cells
+ // over many blocks because one query has nothing else to fill the card with; a prompt has thousands of queries.  Not bit-identical to the split path: the
+ // chunks are folded into one running maximum instead of the merge's two passes (FP32-level differences).
+-template <int NC_, bool DPP_>
++// E702 (STRATA_PROMPT_ATTN_RDNA2=2): the score phase as E687b's V6 - the chunk's K codes read coalesced into LDS (rows
++// HD + 16 bytes apart), a thread per (cell, 64-dimension scale group), Q as FP16 through wave-uniform (scalar) loads,
++// int8 -> fp16 by the 0x64 magic and v_dot2_f32_f16 (minimal kernel 2.0x the score phase, 1.8e-4 of its scale).
++typedef _Float16 e702_h2 __attribute__((ext_vector_type(2)));
++__global__ void e702_q_to_f16_kernel(const float* __restrict__ q, _Float16* __restrict__ qh, long long n) {
++    for (long long i = (long long) blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (long long) gridDim.x * blockDim.x)
++        qh[i] = (_Float16) q[i];
++}
++template <int NC_, bool DPP_, bool S2 = false>
+ __global__ void __launch_bounds__(THREADS) attn_prompt_rdna2_kernel(const float* __restrict__ q, QsaAttnPools p,
+                                                                     const int32_t* __restrict__ ids,
+                                                                     const int32_t* __restrict__ step, int n_kv_heads,
+                                                                     int page_size, float scale, float* __restrict__ attn,
+-                                                                    int cap) {
++                                                                    int cap, const _Float16* __restrict__ qh = nullptr) {
+     constexpr int KV_MODE = 1;
+     const int kvh = blockIdx.x, qi = blockIdx.y;
++    if constexpr (S2) qh += (size_t) qi * (size_t) (n_kv_heads * G) * HD + (size_t) (kvh * G) * HD;
+     q += (size_t) qi * (size_t) (n_kv_heads * G) * HD;
+     attn += (size_t) qi * (size_t) (n_kv_heads * G) * HD;
+     ids += (size_t) qi * (size_t) cap;
+@@ -718,6 +727,9 @@ __global__ void __launch_bounds__(THREADS) attn_prompt_rdna2_kernel(const float*
+     __shared__ __align__(16) float spt[CHUNK][G]; // the chunk's weights, cell-major (the value loop reads 3 float4)
+     __shared__ long long srow[CHUNK];
+     __shared__ float s_m[G], s_l[G], s_a[G];      // running maximum and sum per head, and this chunk's rescale
++    constexpr int KS = HD + 16;                   // E702: K codes in LDS, rows 16 bytes apart (no bank camping)
++    __shared__ __align__(16) int8_t skt[S2 ? CHUNK * KS : 16];
++    __shared__ float sred[S2 ? 4 : 1][G][CHUNK];
+     const int n_ids = __ldg(step + kStepWidth);
+     const int t = threadIdx.x, lane = t & 31, warp = t >> 5;
+     for (int i = t; i < G * HD; i += THREADS) sq[i / HD][i % HD] = q[(size_t) (kvh * G) * HD + i];
+@@ -745,6 +757,52 @@ __global__ void __launch_bounds__(THREADS) attn_prompt_rdna2_kernel(const float*
+             srow[t] = r;
+         }
+         __syncthreads();
++        if constexpr (S2) {   // E702: the score phase on LDS K, FP16 Q and dot2
++#pragma unroll
++            for (int i = 0; i < 4; ++i) {
++                const int e = i * THREADS + t, r = e / 16, o = e % 16;
++                int4 v = make_int4(0, 0, 0, 0);
++                if (srow[r] >= 0) v = reinterpret_cast<const int4*>(p.k_q + srow[r] * HD)[o];
++                *reinterpret_cast<int4*>(&skt[r * KS + o * 16]) = v;
++            }
++            __syncthreads();
++            const int c = t % CHUNK;
++            const int dq = __builtin_amdgcn_readfirstlane(t / CHUNK);
++            const long long row = srow[c];
++            const int4* kp = reinterpret_cast<const int4*>(&skt[c * KS + dq * KV_Q8_GROUP]);
++            const float sc = row >= 0 ? __half2float(__ushort_as_half(p.k_scale[row * (HD / KV_Q8_GROUP) + dq])) : 0.0f;
++            const e702_h2* qp = reinterpret_cast<const e702_h2*>(qh + dq * KV_Q8_GROUP);
++            float a12[G];
++#pragma unroll
++            for (int h = 0; h < G; ++h) a12[h] = 0.0f;
++#pragma unroll 1
++            for (int b = 0; b < 4; ++b) {
++                const int4 k16 = kp[b];
++                const unsigned w[4] = {(unsigned) k16.x, (unsigned) k16.y, (unsigned) k16.z, (unsigned) k16.w};
++#pragma unroll
++                for (int u = 0; u < 4; ++u) {
++                    const unsigned x = w[u] ^ 0x80808080u;
++                    const unsigned p01 = __builtin_amdgcn_perm(0x64646464u, x, 0x04010400u);
++                    const unsigned p23 = __builtin_amdgcn_perm(0x64646464u, x, 0x04030402u);
++                    const e702_h2 bias = {(_Float16) 1152.0f, (_Float16) 1152.0f};
++                    const e702_h2 k01 = __builtin_bit_cast(e702_h2, p01) - bias, k23 = __builtin_bit_cast(e702_h2, p23) - bias;
++                    const int dp = (b * 16 + u * 4) / 2;
++#pragma unroll
++                    for (int h = 0; h < G; ++h) {
++                        a12[h] = __builtin_amdgcn_fdot2(qp[h * (HD / 2) + dp], k01, a12[h], false);
++                        a12[h] = __builtin_amdgcn_fdot2(qp[h * (HD / 2) + dp + 1], k23, a12[h], false);
++                    }
++                }
++            }
++#pragma unroll
++            for (int h = 0; h < G; ++h) sred[dq][h][c] = a12[h] * sc;
++            __syncthreads();
++            for (int i = t; i < G * CHUNK; i += THREADS) {
++                const int h = i / CHUNK, cc = i % CHUNK;
++                sp[h][cc] = (cc < n_here && srow[cc] >= 0)
++                                ? ((sred[0][h][cc] + sred[1][h][cc]) + (sred[2][h][cc] + sred[3][h][cc])) * scale : -FLT_MAX;
++            }
++        } else
+         // scores: attn_chunk_kernel_pre75's phase, unchanged
+         for (int i = 0; i < CHUNK / WARPS; i += NC) {
+             int cc[NC];
+@@ -1229,10 +1287,11 @@ void launch_merge_batch(const int32_t* steps, int64_t cap, const QsaShapes& s, c
+ // STRATA_PROMPT_ATTN_RDNA2=1: a prompt's attention on gfx103x without the decode path's split and merge (see
+ // attn_prompt_rdna2_kernel).  True when it ran; false (the caller keeps its path) when it does not apply here.
+ bool qsa_prompt_attn_rdna2(const float* q, const QsaAttnPools& pools, const int32_t* ids, const int32_t* steps,
+-                           int64_t cap, const QsaShapes& s, float* attn, int64_t n_q, void* stream) {
++                           int64_t cap, const QsaShapes& s, float* attn, int64_t n_q, void* stream, void* q16_scratch,
++                           size_t q16_bytes) {
+ #if defined(STRATA_ATTN_PRE75_BUILT) && defined(__HIPCC__)
+     static const int mode = [] { const char* v = std::getenv("STRATA_PROMPT_ATTN_RDNA2"); return v == nullptr ? 0 : std::atoi(v); }();
+-    if (mode != 1 || n_q <= 0 || !pre75_attn()) return false;
++    if ((mode != 1 && mode != 2) || n_q <= 0 || !pre75_attn()) return false;
+     if (s.head_dim != HD || s.n_head != (int64_t) G * s.n_head_kv || cap <= 0 || !ids || !steps || !pools.page_table ||
+         !pools.k_q || !pools.v_q || !pools.k_scale || !pools.v_scale || pools.k_q4 || pools.v_q4 || n_q > 65535)
+         return false;
+@@ -1243,6 +1302,28 @@ bool qsa_prompt_attn_rdna2(const float* q, const QsaAttnPools& pools, const int3
+                              "with an online softmax (no split, no merge)\n");
+     }
+     const dim3 grid((unsigned) s.n_head_kv, (unsigned) n_q);
++    if (mode == 2) {   // E702: Q as FP16 in the caller's scratch (or a buffer kept here), then the dot2 score phase
++        const size_t need = (size_t) n_q * (size_t) s.n_head * HD * sizeof(_Float16);
++        static void* own = nullptr;
++        static size_t own_bytes = 0;
++        void* buf = q16_scratch;
++        if (buf == nullptr || q16_bytes < need) {
++            if (own_bytes < need) {
++                if (own) cudaFree(own);
++                own = nullptr; own_bytes = 0;
++                if (cudaMalloc(&own, need) != cudaSuccess) { (void) cudaGetLastError(); return false; }
++                own_bytes = need;
++            }
++            buf = own;
++        }
++        static bool said2 = false;
++        if (!said2) { said2 = true; std::fprintf(stderr, "strata prefill: STRATA_PROMPT_ATTN_RDNA2=2: the score phase reads K through LDS and FP16 Q with dot2 (E702)\n"); }
++        const long long n = (long long) n_q * s.n_head * HD;
++        e702_q_to_f16_kernel<<<(unsigned) std::min<long long>((n + 255) / 256, 4096), 256, 0, (cudaStream_t) stream>>>(q, (_Float16*) buf, n);
++        attn_prompt_rdna2_kernel<8, true, true><<<grid, THREADS, 0, (cudaStream_t) stream>>>(
++            q, pools, ids, steps, (int) s.n_head_kv, (int) s.page_size, 1.0f / sqrtf((float) HD), attn, (int) cap,
++            (const _Float16*) buf);
++    } else
+     attn_prompt_rdna2_kernel<8, true><<<grid, THREADS, 0, (cudaStream_t) stream>>>(
+         q, pools, ids, steps, (int) s.n_head_kv, (int) s.page_size, 1.0f / sqrtf((float) HD), attn, (int) cap);
+     const cudaError_t e = cudaGetLastError();
+@@ -1253,6 +1334,7 @@ bool qsa_prompt_attn_rdna2(const float* q, const QsaAttnPools& pools, const int3
+     return true;
+ #else
+     (void) q; (void) pools; (void) ids; (void) steps; (void) cap; (void) s; (void) attn; (void) n_q; (void) stream;
++    (void) q16_scratch; (void) q16_bytes;
+     return false;
+ #endif
+ }
+diff --git a/src/kernels/qsa_prompt_attn_parity.cpp b/src/kernels/qsa_prompt_attn_parity.cpp
+index 2bd0b790..1960ae65 100644
+--- a/src/kernels/qsa_prompt_attn_parity.cpp
++++ b/src/kernels/qsa_prompt_attn_parity.cpp
+@@ -372,7 +372,7 @@ int main(int argc, char** argv) {
+ #if defined(_WIN32)
+         _putenv_s(var, "1");
+ #else
+-        setenv(var, "1", 1);
++        setenv(var, "1", 0);   // E702: an explicit STRATA_PROMPT_ATTN_RDNA2=2 (the dot2 score phase) is kept
+ #endif
+     }
+ #endif
+diff --git a/src/prefill/gemm.cu b/src/prefill/gemm.cu
+index ebc558f5..fe271d5e 100644
+--- a/src/prefill/gemm.cu
++++ b/src/prefill/gemm.cu
+@@ -1334,6 +1334,12 @@ void Gemm::f16_inplace(const uint16_t* X, const uint16_t* W, float* Y, int64_t T
+                         CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT),
+            "cublasGemmEx f16 out");
+     }
++    if (skip_widen_) return;   // E688b: every slice of this product stays FP16 (keep_f16_slices_once)
++    if (keep_n_ > 0 && N == keep_n_) {   // E688: the caller reads the FP16 rows itself (the same values, unwidened)
++        kept_f16_ = true;
++        keep_n_ = 0;
++        return;
++    }
+     static const bool dbg_nan = std::getenv("STRATA_DBG_NAN") != nullptr;
+     widen_rows_f16<<<(unsigned) T, 256, 0, (cudaStream_t) stream_>>>(Y, N, ldy, dbg_nan ? 1 : 0);
+     if (dbg_nan) {   // debug only: a sync per GEMM
+@@ -1459,6 +1465,13 @@ void Gemm::native(const uint16_t* X, int ggml_type, const void* W_blocks, float*
+         }
+     }
+ #endif
++#if defined(__HIPCC__)
++    // E688b: f16() runs f16_inplace exactly when f16_io_ && beta == 0, so only then are the FP16 rows there to keep
++    const bool keep_all = keep_all_n_ > 0 && keep_all_n_ == N && f16_io_ && beta == 0.0f;
++#else
++    const bool keep_all = false;
++#endif
++    if (keep_all) skip_widen_ = true;
+     if (N * K > scratch_elems_) {
+         // Too large for the scratch at once: in row slices.
+         const int64_t rows = scratch_elems_ / K;
+@@ -1469,6 +1482,7 @@ void Gemm::native(const uint16_t* X, int ggml_type, const void* W_blocks, float*
+             strata::kernels::dequant_f16(ggml_type, W_blocks, r0, n, K, scratch_, stream_);
+             f16(X, scratch_, Y + r0, T, n, K, ldy, beta);
+         }
++        if (keep_all) { skip_widen_ = false; kept_rows_ = rows; keep_all_n_ = 0; }
+         // the side stream's next dequant into scratch_ waits for these slices' reads and writes of it
+         if (side_scratch_) (void) cudaEventRecord((cudaEvent_t) side_free_[0], (cudaStream_t) stream_);
+         return;
+@@ -1487,10 +1501,12 @@ void Gemm::native(const uint16_t* X, int ggml_type, const void* W_blocks, float*
+         f16(X, s, Y, T, N, K, ldy, beta);
+         (void) cudaEventRecord((cudaEvent_t) side_free_[side_cur_], (cudaStream_t) stream_);
+         side_cur_ ^= 1;
++        if (keep_all) { skip_widen_ = false; kept_rows_ = N; keep_all_n_ = 0; }
+         return;
+     }
+     strata::kernels::dequant_f16(ggml_type, W_blocks, 0, N, K, scratch_, stream_);
+     f16(X, scratch_, Y, T, N, K, ldy, beta);
++    if (keep_all) { skip_widen_ = false; kept_rows_ = N; keep_all_n_ = 0; }
+ }
+ 
+ }  // namespace strata::prefill
+diff --git a/src/prefill/kernels.cu b/src/prefill/kernels.cu
+index 35a15621..ffd7bad6 100644
+--- a/src/prefill/kernels.cu
++++ b/src/prefill/kernels.cu
+@@ -145,6 +145,9 @@ __global__ void gr_norm_rs_kernel(const float* __restrict__ R, const float* __re
+         if (xn16_lo) xn16_lo[xo + d] = bf_lo(v, h);
+     }
+ }
++// G16 (E688, STRATA_F16_NOWIDEN): `g` holds the up projection's FP16 rows unwidened (row t's halves at the start of
++// its 10240-float row, 2 * D halves a row); the FP16 -> FP32 conversion is the widening's, so the sums are the same bits
++template <bool G16 = false>
+ __global__ void gr_mix_r_kernel(const float* __restrict__ R, const float* __restrict__ rs, const float* __restrict__ w,
+                                 const float* __restrict__ g, float* __restrict__ mixed, uint16_t* __restrict__ mixed16,
+                                 int64_t T, uint16_t* __restrict__ mixed_h, uint16_t* __restrict__ mixed16_lo) {
+@@ -156,7 +159,8 @@ __global__ void gr_mix_r_kernel(const float* __restrict__ R, const float* __rest
+     for (int c = 0; c < HC; ++c) {
+         const int64_t j = t * D + c * N + d;
+         const float x = R[j] * rs[t * HC + c] * w[c * N + d];   // gr_norm_kernel's value, bit for bit
+-        s = fmaf(x, sigm(g[j]), s);
++        const float gv = G16 ? __half2float(reinterpret_cast<const __half*>(g)[t * 2 * D + c * N + d]) : g[j];
++        s = fmaf(x, sigm(gv), s);
+     }
+     s /= (float) HC;
+     mixed[i] = s;
+@@ -322,15 +326,24 @@ __global__ void gdn_gates_kernel(const float* __restrict__ ab, const float* __re
+     gate[i] = (v > 20.0f ? v : log1pf(__expf(v))) * ssm_a[h];
+     beta[i] = sigm(ab[t * 2 * HV + HV + h]);
+ }
++// E688b (STRATA_F16_NOWIDEN): the attn_qkv product left FP16 in its FP32 buffer, row slices of R columns (Gemm::
++// keep_f16_slices_once): column c of token t at half t * 2C + c + (c / R) * R.  widen_rows_f16 is __half2float, so this
++// reads the same values the widened buffer holds.
++template <bool H16>
++__device__ __forceinline__ float qkv_at(const float* __restrict__ qkv, int64_t t, int c, int R) {
++    if constexpr (H16) return __half2float(reinterpret_cast<const __half*>(qkv)[t * 2 * C + c + (c / R) * R]);
++    else { (void) R; return qkv[t * C + c]; }
++}
+ // one thread per channel, walks the chunk; then a second kernel normalises
++template <bool H16 = false>
+ __global__ void gdn_conv_kernel(float* __restrict__ hist, const float* __restrict__ qkv, const float* __restrict__ w,
+-                                float* __restrict__ h, int64_t T) {
++                                float* __restrict__ h, int64_t T, int R = 0) {
+     const int c = blockIdx.x * blockDim.x + threadIdx.x;
+     if (c >= C) return;
+     float v0 = hist[c * 3], v1 = hist[c * 3 + 1], v2 = hist[c * 3 + 2];
+     const float w0 = w[c * 4], w1 = w[c * 4 + 1], w2 = w[c * 4 + 2], w3 = w[c * 4 + 3];
+     for (int64_t t = 0; t < T; ++t) {
+-        const float x = qkv[t * C + c];
++        const float x = qkv_at<H16>(qkv, t, c, R);
+         const float s = v0 * w0 + v1 * w1 + v2 * w2 + x * w3;
+         h[t * C + c] = s / (1.0f + __expf(-s));
+         v0 = v1; v1 = v2; v2 = x;
+@@ -362,17 +375,18 @@ __global__ void gdn_conv_tiled_kernel(const float* __restrict__ hist, const floa
+ // are the 128 channels of one head, so for the q / k heads (block < 2 HK) the norm's sum of squares is the block's:
+ // the same warp_sum, the same four partials added in the same order, the same v * rsqrtf(ss + eps) on the same
+ // stored value - the same bits, without writing h and reading it back (16 tokens per round).
++template <bool H16 = false>
+ __global__ void gdn_conv_l2_kernel(const float* __restrict__ hist, const float* __restrict__ qkv,
+-                                   const float* __restrict__ w, float* __restrict__ h, int64_t T, float eps) {
++                                   const float* __restrict__ w, float* __restrict__ h, int64_t T, float eps, int R = 0) {
+     const int c = blockIdx.x * blockDim.x + threadIdx.x;
+     const int64_t t0 = (int64_t) blockIdx.y * CONV_TILE;
+     if (t0 >= T) return;
+     const int64_t t1 = t0 + CONV_TILE < T ? t0 + CONV_TILE : T;
+-    auto input = [&](int64_t t) -> float { return t >= 0 ? qkv[t * C + c] : hist[c * 3 + (int) (t + 3)]; };
++    auto input = [&](int64_t t) -> float { return t >= 0 ? qkv_at<H16>(qkv, t, c, R) : hist[c * 3 + (int) (t + 3)]; };
+     float v0 = input(t0 - 3), v1 = input(t0 - 2), v2 = input(t0 - 1);
+     const float w0 = w[c * 4], w1 = w[c * 4 + 1], w2 = w[c * 4 + 2], w3 = w[c * 4 + 3];
+     for (int64_t t = t0; t < t1; ++t) {   // gdn_conv_tiled_kernel's loop, verbatim
+-        const float x = qkv[t * C + c];
++        const float x = qkv_at<H16>(qkv, t, c, R);
+         const float s = v0 * w0 + v1 * w1 + v2 * w2 + x * w3;
+         h[t * C + c] = s / (1.0f + __expf(-s));
+         v0 = v1; v1 = v2; v2 = x;
+@@ -451,13 +465,14 @@ __global__ void __launch_bounds__(128) gdn_conv_w_kernel(const float* __restrict
+     }
+ }
+ // the history after the chunk: its last three inputs (the older history where the chunk is shorter than 3)
+-__global__ void gdn_conv_hist_kernel(float* __restrict__ hist, const float* __restrict__ qkv, int64_t T) {
++template <bool H16 = false>
++__global__ void gdn_conv_hist_kernel(float* __restrict__ hist, const float* __restrict__ qkv, int64_t T, int R = 0) {
+     const int c = blockIdx.x * blockDim.x + threadIdx.x;
+     if (c >= C) return;
+     float v[3];
+     for (int k = 0; k < 3; ++k) {
+         const int64_t t = T - 3 + k;
+-        v[k] = t >= 0 ? qkv[t * C + c] : hist[c * 3 + (int) (t + 3)];
++        v[k] = t >= 0 ? qkv_at<H16>(qkv, t, c, R) : hist[c * 3 + (int) (t + 3)];
+     }
+     hist[c * 3] = v[0]; hist[c * 3 + 1] = v[1]; hist[c * 3 + 2] = v[2];
+ }
+@@ -2825,9 +2840,13 @@ void gr_norm_rs(const float* R, const float* w_norm, float eps, float* rs, uint1
+     check("gr_norm_rs");
+ }
+ void gr_mix_r(const float* R, const float* rs, const float* w_norm, const float* gated, float* mixed, uint16_t* mixed16,
+-              int64_t T, void* stream, uint16_t* mixed_h, uint16_t* mixed16_lo) {
+-    gr_mix_r_kernel<<<blocks_for(T * N), 256, 0, (cudaStream_t) stream>>>(R, rs, w_norm, gated, mixed, mixed16, T,
+-                                                                          mixed_h, mixed16_lo);
++              int64_t T, void* stream, uint16_t* mixed_h, uint16_t* mixed16_lo, bool gated_f16) {
++    if (gated_f16)
++        gr_mix_r_kernel<true><<<blocks_for(T * N), 256, 0, (cudaStream_t) stream>>>(R, rs, w_norm, gated, mixed, mixed16, T,
++                                                                                    mixed_h, mixed16_lo);
++    else
++        gr_mix_r_kernel<false><<<blocks_for(T * N), 256, 0, (cudaStream_t) stream>>>(R, rs, w_norm, gated, mixed, mixed16, T,
++                                                                                     mixed_h, mixed16_lo);
+     check("gr_mix_r");
+ }
+ bool gr_upmix(const uint16_t* lo16, const uint16_t* w_up, const float* R, const float* rs, const float* w_norm,
+@@ -2896,8 +2915,29 @@ void gdn_gates(const float* ab, const float* dt, const float* ssm_a, float* gate
+     gdn_gates_kernel<<<blocks_for(T * HV), 256, 0, (cudaStream_t) stream>>>(ab, dt, ssm_a, gate, beta, T);
+     check("gdn_gates");
+ }
+-void gdn_conv(float* history, const float* qkv, const float* conv_w, float* h, int64_t T, float eps, void* stream) {
++bool gdn_conv_f16_ok() {   // E688b: the conv kernels that read an unwidened FP16 qkv (the serial walk and CONVL2=1)
++    static const bool ok = [] {
++        const char* m = std::getenv("STRATA_GDN_CONVL2");
++        const char* ch = std::getenv("STRATA_GDN_CHUNKED");
++        return std::getenv("STRATA_GDN_CONV_SERIAL") == nullptr && m != nullptr && std::atoi(m) == 1 &&
++               (ch == nullptr || std::atoi(ch) == 0);
++    }();
++    return ok;
++}
++void gdn_conv(float* history, const float* qkv, const float* conv_w, float* h, int64_t T, float eps, void* stream, int f16_rows) {
+     static const bool serial = std::getenv("STRATA_GDN_CONV_SERIAL") != nullptr;   // the old walk (A/B)
++    if (f16_rows > 0) {   // E688b: qkv left FP16 in row slices of f16_rows columns (only where gdn_conv_f16_ok())
++        if (T <= CONV_TILE) {
++            gdn_conv_kernel<true><<<C / 128, 128, 0, (cudaStream_t) stream>>>(history, qkv, conv_w, h, T, f16_rows);
++            gdn_l2_kernel<<<dim3(2 * HK, (unsigned) T), S, 0, (cudaStream_t) stream>>>(h, eps);
++        } else {
++            gdn_conv_l2_kernel<true><<<dim3(C / 128, (unsigned) ((T + CONV_TILE - 1) / CONV_TILE)), 128, 0,
++                                       (cudaStream_t) stream>>>(history, qkv, conv_w, h, T, eps, f16_rows);
++            gdn_conv_hist_kernel<true><<<C / 128, 128, 0, (cudaStream_t) stream>>>(history, qkv, T, f16_rows);
++        }
++        check("gdn_conv (fp16 qkv)");
++        return;
++    }
+     if (serial || T <= CONV_TILE) {
+         gdn_conv_kernel<<<C / 128, 128, 0, (cudaStream_t) stream>>>(history, qkv, conv_w, h, T);
+     } else {
+diff --git a/src/prefill/moe_mmq.cu b/src/prefill/moe_mmq.cu
+index 8a53f122..b444324a 100644
+--- a/src/prefill/moe_mmq.cu
++++ b/src/prefill/moe_mmq.cu
+@@ -148,7 +148,7 @@ __global__ void swiglu_kernel(const float* __restrict__ gu, float* __restrict__
+     h[i] = g / (1.0f + __expf(-g)) * u;
+ }
+ 
+-#if !defined(__HIPCC__) && defined(STRATA_EXPERIMENTAL_SM60)
++#if defined(__HIPCC__) || defined(STRATA_EXPERIMENTAL_SM60)   // waitlist (E701): HIP too, behind STRATA_SWIGLU_Q8=1 + a byte check
+ // swiglu_kernel (n_ff 640), then quantize_mmq_q8_1<D4>'s rows of its output, in one pass: a block per row (128
+ // threads, 4 values each, blockIdx.y the row's 512-value half), H never stored.  Each value is swiglu_kernel's
+ // expression and each 32-value block quantize_mmq_q8_1's (the same unit and flags: the same bits).
+@@ -181,7 +181,11 @@ __global__ void __launch_bounds__(128) swiglu_quant_kernel(const float* __restri
+     amax = fmaxf(amax, fabsf(xi.z));
+     amax = fmaxf(amax, fabsf(xi.w));
+ #pragma unroll
++#if defined(__HIPCC__)
++    for (int offset = 32 / 8; offset > 0; offset >>= 1) amax = fmaxf(amax, __shfl_xor(amax, offset, 32));
++#else
+     for (int offset = 32 / 8; offset > 0; offset >>= 1) amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset, WARP_SIZE));
++#endif
+     const float d_inv = 127.0f / amax;
+     char4 c;
+     c.x = roundf(xi.x * d_inv);
+@@ -725,8 +729,18 @@ void swiglu(const float* gu, float* h, int64_t rows, int64_t n_ff, bool interlea
+     ck(cudaGetLastError(), "swiglu");
+ }
+ 
++bool swiglu_quant_hip_on() {   // E701 STRATA_SWIGLU_Q8=1 (HIP, opt-in): the fused pass in the grouped path too
++#if defined(__HIPCC__)
++    static const bool on = [] { const char* v = std::getenv("STRATA_SWIGLU_Q8"); return v != nullptr && v[0] == '1'; }();
++    return on;
++#else
++    return false;
++#endif
++}
+ bool swiglu_quant_ok(int t) {
+-#if !defined(__HIPCC__) && defined(STRATA_EXPERIMENTAL_SM60)
++#if defined(__HIPCC__)
++    return swiglu_quant_hip_on() && supported(t) && !fp4_activations(t) && mmq_get_q8_1_ds_layout((ggml_type) t) == MMQ_Q8_1_DS_LAYOUT_D4;
++#elif defined(STRATA_EXPERIMENTAL_SM60)
+     // the q8_1 D4 rows quantize() writes for a down product's H (K 640)
+     return supported(t) && !fp4_activations(t) && mmq_get_q8_1_ds_layout((ggml_type) t) == MMQ_Q8_1_DS_LAYOUT_D4;
+ #else
+@@ -736,7 +750,7 @@ bool swiglu_quant_ok(int t) {
+ }
+ 
+ void swiglu_quant(const float* gu, void* hq, int64_t rows, bool interleaved, void* stream) {
+-#if !defined(__HIPCC__) && defined(STRATA_EXPERIMENTAL_SM60)
++#if defined(__HIPCC__) || defined(STRATA_EXPERIMENTAL_SM60)
+     if (rows <= 0) return;
+     const dim3 grid((unsigned) rows, 2);
+     if (interleaved) swiglu_quant_kernel<true><<<grid, 128, 0, (cudaStream_t) stream>>>(gu, (block_q8_1_mmq*) hq, rows);
+diff --git a/src/prefill/prefill.cpp b/src/prefill/prefill.cpp
+index b212fd0a..c0843c80 100644
+--- a/src/prefill/prefill.cpp
++++ b/src/prefill/prefill.cpp
+@@ -537,6 +537,17 @@ static int64_t pf_switch_min_t() {   // S23: STRATA_PF_SWITCH_MIN_T=N - the roun
+     static const int64_t v = [] { const char* e = std::getenv("STRATA_PF_SWITCH_MIN_T"); return e ? (int64_t) std::atoll(e) : (int64_t) 0; }();
+     return v;
+ }
++// E688 (opt-in STRATA_F16_NOWIDEN=1, HIP FP16 prompt path): the hyper-connection up projection's FP16 output is left
++// unwidened and gr_mix_r reads it as FP16 (the same values, so the same bits); a product the GEMM slices widens as before
++inline bool f16_nowiden() {
++    static const bool v = [] {
++        const char* e = std::getenv("STRATA_F16_NOWIDEN");
++        const bool on = e != nullptr && e[0] == '1';
++        if (on) std::fprintf(stderr, "strata prefill: STRATA_F16_NOWIDEN=1: the hyper-connection up projection stays FP16 and the mix reads it as FP16 (no widening pass)\n");
++        return on;
++    }();
++    return v;
++}
+ inline bool hc_upmix() {
+     static const bool v = [] { const char* e = std::getenv("STRATA_HC_UPMIX"); return e != nullptr && e[0] == '1'; }();
+     return v;
+@@ -3005,6 +3016,48 @@ bool bf16_proj(Gemm& gm, const core::WeightRef* w, const uint16_t* X, float* Y,
+     return true;
+ }
+ 
++// E701 STRATA_SWIGLU_Q8=1 (HIP, opt-in): the grouped path's swiglu + quantize of H as one pass (mmq::swiglu_quant, the
++// swiglu_kernel expression and quantize_mmq_q8_1<D4>'s bytes); STRATA_SWIGLU_Q8_CHECK=N: on the first N passes the two-pass
++// form runs after it into the same hq and the bytes are compared (1152 bytes a row: pad512(640) / 128 blocks of 144 B)
++inline void swiglu_hq(const float* GU, float* H, void* Hq, int64_t nr, bool interleaved, int dt, void* cs, float* hscale) {
++    static int left = [] { const char* e = std::getenv("STRATA_SWIGLU_Q8_CHECK"); return e ? std::atoi(e) : 0; }();
++    mmq::swiglu_quant(GU, Hq, nr, interleaved, cs);
++    if (left <= 0 || nr <= 0) return;
++    --left;
++    const size_t nb = (size_t) nr * 1152;
++    std::vector<uint8_t> got(nb), ref(nb);
++    cudaMemcpyAsync(got.data(), Hq, nb, cudaMemcpyDeviceToHost, (cudaStream_t) cs);
++    mmq::swiglu(GU, H, nr, 640, interleaved, cs);
++    mmq::quantize(H, nullptr, Hq, dt, 640, 640, nr, cs, hscale);
++    cudaMemcpyAsync(ref.data(), Hq, nb, cudaMemcpyDeviceToHost, (cudaStream_t) cs);
++    cudaStreamSynchronize((cudaStream_t) cs);
++    size_t diff = 0;
++    for (size_t i = 0; i < nb; ++i) diff += got[i] != ref[i];
++    std::fprintf(stderr, "strata: STRATA_SWIGLU_Q8_CHECK rows %lld type %d: %zu of %zu bytes differ from swiglu + quantize%s\n",
++                 (long long) nr, dt, diff, nb, diff ? " (MISMATCH)" : " (bitwise equal)");
++}
++
++// STRATA_F16_NOWIDEN_CHECK=N: on the first N mixes that read FP16, the up projection again the default way (widened)
++// and the default mix, `mixed` compared bit for bit (the values written are the same, so nothing else changes)
++inline bool f16_nowiden_check(Gemm& gm, const core::WeightRef* wu, const uint16_t* lo16, float* gated, const float* R,
++                              const float* grs, const float* wn, float* mixed, uint16_t* mixed_bf, uint16_t* mixed_h,
++                              uint16_t* mixed_bf_lo, int64_t T, const std::string& su, std::string& err, void* cs) {
++    static int left = [] { const char* e = std::getenv("STRATA_F16_NOWIDEN_CHECK"); return e ? std::atoi(e) : 0; }();
++    if (left <= 0) return true;
++    --left;
++    const size_t n = (size_t) T * 2560;
++    std::vector<float> got(n), ref(n);
++    cudaMemcpyAsync(got.data(), mixed, n * 4, cudaMemcpyDeviceToHost, (cudaStream_t) cs);
++    if (!bf16_proj(gm, wu, lo16, gated, T, su, err, 0, nullptr, 0, cs)) return false;
++    gr_mix_r(R, grs, wn, gated, mixed, mixed_bf, T, cs, mixed_h, mixed_bf_lo, false);
++    cudaMemcpyAsync(ref.data(), mixed, n * 4, cudaMemcpyDeviceToHost, (cudaStream_t) cs);
++    cudaStreamSynchronize((cudaStream_t) cs);
++    size_t diff = 0;
++    for (size_t i = 0; i < n; ++i) diff += std::memcmp(&got[i], &ref[i], 4) != 0;
++    std::fprintf(stderr, "strata: STRATA_F16_NOWIDEN_CHECK T %lld: %zu of %zu mixed values differ from the widened path%s\n",
++                 (long long) T, diff, n, diff ? " (MISMATCH)" : " (bitwise equal)");
++    return true;
++}
+ }  // namespace
+ 
+ namespace {
+@@ -4153,7 +4206,9 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                                            m.mixed, m.mixed_bf, m.mixed_h, T, m.cs);
+                     }
+                 }
++                if (!upmixed && f16_nowiden() && !gr_unfused() && !m.lo16_lo) m.gemm.keep_f16_once(wu->ne1 > 0 ? wu->ne1 : 1);
+                 if (!upmixed && !bf16_proj(m.gemm, wu, m.lo16, m.gated, T, su, err, 0, m.lo16_lo, 0, m.cs)) return false;
++                const bool gated16 = m.gemm.take_kept_f16();   // E688: before the inject product, which shares the Gemm
+                 pt.mark(kPfHcInj, cs);
+                 if (!hcd && !bf16_proj(m.gemm, wi, m.xn16, m.inj, T, si, err, 0, m.xn16_lo, ldx != D ? ldx : 0, m.cs, xf16)) return false;
+                 pt.mark(kPfHcMix, cs);
+@@ -4162,7 +4217,9 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                     gr_mix(m.xn, m.gated, m.mixed, m.mixed_bf, T, m.cs, m.mixed_h, m.mixed_bf_lo);
+                 } else {
+                     gr_mix_r(m.R, m.grs, (const float*) wn->data, m.gated, m.mixed, m.mixed_bf, T, m.cs, m.mixed_h,
+-                             m.mixed_bf_lo);
++                             m.mixed_bf_lo, gated16);
++                    if (gated16 && !f16_nowiden_check(m.gemm, wu, m.lo16, m.gated, m.R, m.grs, (const float*) wn->data, m.mixed,
++                                                      m.mixed_bf, m.mixed_h, m.mixed_bf_lo, T, su, err, m.cs)) return false;
+                 }
+ 
+                 if (wd_q8.data) {   // the HC GEMMs that read the scratch are enqueued: the next user waits for them
+@@ -4181,7 +4238,14 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                     core::SessionState& gs = (dp && dp_foreign_ != nullptr && !owns_gdn(ss, gdn_index)) ? *dp_foreign_ : ss;
+                     float* state = gs.gdn_state + (size_t) (gdn_index - gs.gdn_ord0) * gdn_floats;
+                     float* conv = state + (uint64_t) g.ssm_state_size * g.ssm_v_heads * g.ssm_state_size;
++                    const bool qkv16_req = f16_nowiden() && gdn_conv_f16_ok() && !kva_state_only;   // E688b
++                    if (qkv16_req) m.gemm.keep_f16_slices_once(wqkv->ne1);
+                     if (!native_proj(m.gemm, wqkv, m.mixed_h, m.qkv, T, v.name("attn_qkv.weight"), err)) return false;
++                    const int qkv16_rows = qkv16_req ? (int) m.gemm.take_kept_rows() : 0;
++                    if (qkv16_rows > 0) {
++                        static bool said = false;
++                        if (!said) { said = true; std::fprintf(stderr, "strata prefill: STRATA_F16_NOWIDEN=1: attn_qkv stays FP16 too (slices of %d columns) and the GDN conv reads it as FP16\n", qkv16_rows); }
++                    }
+                     // KVA: the gate projection feeds only the output normalization, which a state-only layer skips
+                     // (STRATA_KVA_GDN_NORM=1 keeps the full recurrence as the A/B control for the state-only one)
+                     static const bool kva_gdn_norm = [] {
+@@ -4198,11 +4262,30 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                     bool fused_gdn = false;
+ #if defined(STRATA_USE_HIP)
+                     // gfx12, STRATA_GDN_CHUNKED=1: conv and recurrence together, the conv output as FP16 (their time then shows in "gdn conv+gates")
+-                    if (!kva_state_only)
++                    if (!kva_state_only && qkv16_rows == 0)
+                         fused_gdn = gdn_conv_recurrence_fused(conv, m.qkv, (const float*) wc->data, m.hbuf, state, m.gate, m.beta, m.z,
+                                                               (const float*) wnm->data, EPS, EPS, m.y, m.y_h, T, m.cs, ld_y);
+ #endif
+-                    if (!fused_gdn) gdn_conv(conv, m.qkv, (const float*) wc->data, m.hbuf, T, EPS, m.cs);
++                    static int qkv_check_left = [] { const char* e = std::getenv("STRATA_F16_NOWIDEN_QKV_CHECK"); return e ? std::atoi(e) : 0; }();
++                    if (!fused_gdn && qkv16_rows > 0 && qkv_check_left > 0) {   // E688b: the conv output against the widened path, bit for bit
++                        --qkv_check_left;
++                        const size_t QC = (size_t) wqkv->ne1;   // 10240 (this function's C is the chunk length)
++                        const size_t nh = (size_t) T * QC, nc = QC * 3;
++                        std::vector<float> hist0(nc), got(nh), ref(nh);
++                        cudaMemcpyAsync(hist0.data(), conv, nc * 4, cudaMemcpyDeviceToHost, (cudaStream_t) m.cs);
++                        gdn_conv(conv, m.qkv, (const float*) wc->data, m.hbuf, T, EPS, m.cs, qkv16_rows);
++                        cudaMemcpyAsync(got.data(), m.hbuf, nh * 4, cudaMemcpyDeviceToHost, (cudaStream_t) m.cs);
++                        cudaStreamSynchronize((cudaStream_t) m.cs);
++                        cudaMemcpyAsync(conv, hist0.data(), nc * 4, cudaMemcpyHostToDevice, (cudaStream_t) m.cs);
++                        if (!native_proj(m.gemm, wqkv, m.mixed_h, m.qkv, T, v.name("attn_qkv.weight"), err)) return false;
++                        gdn_conv(conv, m.qkv, (const float*) wc->data, m.hbuf, T, EPS, m.cs, 0);
++                        cudaMemcpyAsync(ref.data(), m.hbuf, nh * 4, cudaMemcpyDeviceToHost, (cudaStream_t) m.cs);
++                        cudaStreamSynchronize((cudaStream_t) m.cs);
++                        size_t diff = 0;
++                        for (size_t i = 0; i < nh; ++i) diff += std::memcmp(&got[i], &ref[i], 4) != 0;
++                        std::fprintf(stderr, "strata: STRATA_F16_NOWIDEN_QKV_CHECK T %lld (slices of %d): %zu of %zu conv outputs differ from the widened path%s\n",
++                                     (long long) T, qkv16_rows, diff, nh, diff ? " (MISMATCH)" : " (bitwise equal)");
++                    } else if (!fused_gdn) gdn_conv(conv, m.qkv, (const float*) wc->data, m.hbuf, T, EPS, m.cs, qkv16_rows);
+                     pt.mark(kPfGdnRec, cs);
+                     if (fused_gdn) {
+                     } else if (kva_state_only && !kva_gdn_norm)   // KVA: the recurrence without the output normalization
+@@ -4475,7 +4558,8 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                     // STRATA_PROMPT_ATTN_RDNA2=1 (HIP gfx103x, INT8 K/V): one block per query and KV head, no split and merge
+ #if defined(STRATA_USE_HIP)
+                     const bool rdna2_attn = !old_attn && strata::kernels::qsa_prompt_attn_rdna2(m.q, pools, m.sel_ids, m.steps_dev,
+-                                                                                               m.cap, s, m.attn, T, m.cs);
++                                                                                               m.cap, s, m.attn, T, m.cs,
++                                                                                               m.qkv, (size_t) T * 10240 * sizeof(float));   // E702: the GDN qkv buffer (T x 10240 floats, file-scope C; this function's C is the chunk) is free in a QSA layer
+ #else
+                     const bool rdna2_attn = false;   // HIP only (the CUDA, SYCL and Metal builds never reference it)
+ #endif
+@@ -5783,12 +5867,15 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                                         m.mmq_ctx->run(gu, m.cs);
+                                         if (lay.native && lay.fmt[(size_t) l].tail_off)
+                                             mmq::swiglu_scaled(m.GU, m.H, nra, 640, m.bounds_dev + rg.a, nx, m.grp_tail + eo * 4, ra, m.cs);
++                                        else if (!had_d && mmq::swiglu_quant_ok(mmq_dt))   // E701
++                                            swiglu_hq(m.GU, m.H, m.Hq, nra, !lay.native, mmq_dt, m.cs, m.Hscale);
+                                         else
+                                             mmq::swiglu(m.GU, m.H, nra, 640, !lay.native, m.cs);
+                                         if (had_d)   // per row, as the whole group's path
+                                             strata::kernels::hadamard_rows(m.H, m.H, nra, 640, had_block, had_sh, m.cs);
+                                         pt.mark(kPfGemmD, cs);
+-                                        mmq::quantize(m.H, nullptr, m.Hq, mmq_dt, 640, 640, nra, m.cs, m.Hscale);
++                                        if ((lay.native && lay.fmt[(size_t) l].tail_off) || had_d || !mmq::swiglu_quant_ok(mmq_dt))
++                                            mmq::quantize(m.H, nullptr, m.Hq, mmq_dt, 640, 640, nra, m.cs, m.Hscale);
+                                         mmq::Product dn;
+                                         dn.w = m.grp_d + eo * mmq_db; dn.type = mmq_dt; dn.w_rows = N; dn.w_cols = 640; dn.expert_bytes = mmq_db;
+                                         dn.n = nx; dn.xq = m.Hq; dn.bounds = m.bounds_dev + rg.rel;
+@@ -5837,12 +5924,15 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
+                                 if (lay.native && lay.fmt[(size_t) l].tail_off)   // gate/up scales applied as read
+                                     mmq::swiglu_scaled(m.GU + r0 * 1280, m.H + r0 * 640, nr, 640, m.bounds_dev + j0, ngx,
+                                                        m.grp_tail, r0, m.cs);
++                                else if (!had_d && mmq::swiglu_quant_ok(mmq_dt))   // E701
++                                    swiglu_hq(m.GU + r0 * 1280, m.H + r0 * 640, m.Hq, nr, !lay.native, mmq_dt, m.cs, m.Hscale);
+                                 else
+                                     mmq::swiglu(m.GU + r0 * 1280, m.H + r0 * 640, nr, 640, !lay.native, m.cs);
+                                 if (had_d)
+                                     strata::kernels::hadamard_rows(m.H + r0 * 640, m.H + r0 * 640, nr, 640, had_block, had_sh, m.cs);
+                                 pt.mark(kPfGemmD, cs);
+-                                mmq::quantize(m.H + r0 * 640, nullptr, m.Hq, mmq_dt, 640, 640, nr, m.cs, m.Hscale);
++                                if ((lay.native && lay.fmt[(size_t) l].tail_off) || had_d || !mmq::swiglu_quant_ok(mmq_dt))
++                                    mmq::quantize(m.H + r0 * 640, nullptr, m.Hq, mmq_dt, 640, 640, nr, m.cs, m.Hscale);
+                                 mmq::Product dn;
+                                 dn.w = m.grp_d; dn.type = mmq_dt; dn.w_rows = N; dn.w_cols = 640; dn.expert_bytes = mmq_db;
+                                 dn.n = ngx; dn.xq = m.Hq; dn.bounds = m.bounds_dev + n + 1 + g * (MMQ_GROUP + 1);
+@@ -7460,11 +7550,15 @@ bool Prefill::lm_run(const std::vector<Seg>& segs, int depth, const std::vector<
+                     normed = false;
+                     if (!bf16_proj(m.gemm, wd, m.xn16, m.lo, T, sd, err, 0, m.xn16_lo, 0, cs)) return false;
+                     gr_silu(m.lo, m.lo16, T, cs, m.lo16_lo);
++                    if (f16_nowiden() && !gr_unfused() && !m.lo16_lo) m.gemm.keep_f16_once(wu->ne1 > 0 ? wu->ne1 : 1);
+                     if (!bf16_proj(m.gemm, wu, m.lo16, m.gated, T, su, err, 0, m.lo16_lo, 0, cs)) return false;
++                    const bool gated16 = m.gemm.take_kept_f16();   // E688: before the inject product, which shares the Gemm
+                     if (!bf16_proj(m.gemm, wi, m.xn16, m.inj, T, si, err, 0, m.xn16_lo, 0, cs)) return false;
+                     if (gr_unfused()) gr_mix(m.xn, m.gated, m.mixed, m.mixed_bf, T, cs, m.mixed_h, m.mixed_bf_lo);
+                     else gr_mix_r(m.R, m.grs, (const float*) wn->data, m.gated, m.mixed, m.mixed_bf, T, cs, m.mixed_h,
+-                                  m.mixed_bf_lo);
++                                  m.mixed_bf_lo, gated16);
++                    if (gated16 && !f16_nowiden_check(m.gemm, wu, m.lo16, m.gated, m.R, m.grs, (const float*) wn->data, m.mixed,
++                                                      m.mixed_bf, m.mixed_h, m.mixed_bf_lo, T, su, err, cs)) return false;
+                     if (wd_q8.data) {   // the HC GEMMs that read the scratch are enqueued: the next user waits for them
+                         core::NativeDense::hc_bf16_release(cs, 0, 0);
+                         core::NativeDense::hc_bf16_release(cs, 1, 0);
+@@ -7480,7 +7574,10 @@ bool Prefill::lm_run(const std::vector<Seg>& segs, int depth, const std::vector<
+                         pt.mark(kPfGdn, cs);
+                         float* state = ssp->gdn_state + (size_t) (gdn_index - ssp->gdn_ord0) * gdn_floats;
+                         float* conv = state + (uint64_t) g.ssm_state_size * g.ssm_v_heads * g.ssm_state_size;
++                        const bool qkv16_req = f16_nowiden() && gdn_conv_f16_ok();   // E688b
++                        if (qkv16_req) m.gemm.keep_f16_slices_once(wqkv->ne1);
+                         if (!native_proj(m.gemm, wqkv, m.mixed_h, m.qkv, T, v.name("attn_qkv.weight"), err)) return false;
++                        const int qkv16_rows = qkv16_req ? (int) m.gemm.take_kept_rows() : 0;
+                         if (!native_proj(m.gemm, wg, m.mixed_h, m.z, T, v.name("attn_gate.weight"), err)) return false;
+                         if (!bf16_proj(m.gemm, wa, m.mixed_bf, m.ab, T, v.name("ssm_alpha.weight"), err, 2 * HV, m.mixed_bf_lo)) return false;
+                         if (!bf16_proj(m.gemm, wb, m.mixed_bf, m.ab + HV, T, v.name("ssm_beta.weight"), err, 2 * HV, m.mixed_bf_lo)) return false;
+@@ -7488,10 +7585,11 @@ bool Prefill::lm_run(const std::vector<Seg>& segs, int depth, const std::vector<
+                         gdn_gates(m.ab, (const float*) wdt->data, (const float*) wsa->data, m.gate, m.beta, T, cs);
+                         bool fused_gdn = false;
+ #if defined(STRATA_USE_HIP)
+-                        fused_gdn = gdn_conv_recurrence_fused(conv, m.qkv, (const float*) wc->data, m.hbuf, state, m.gate, m.beta, m.z,
+-                                                              (const float*) wnm->data, EPS, EPS, m.y, m.y_h, T, cs, 0);
++                        if (qkv16_rows == 0)
++                            fused_gdn = gdn_conv_recurrence_fused(conv, m.qkv, (const float*) wc->data, m.hbuf, state, m.gate, m.beta, m.z,
++                                                                  (const float*) wnm->data, EPS, EPS, m.y, m.y_h, T, cs, 0);
+ #endif
+-                        if (!fused_gdn) gdn_conv(conv, m.qkv, (const float*) wc->data, m.hbuf, T, EPS, cs);
++                        if (!fused_gdn) gdn_conv(conv, m.qkv, (const float*) wc->data, m.hbuf, T, EPS, cs, qkv16_rows);
+                         pt.mark(kPfGdnRec, cs);
+                         if (!fused_gdn)
+                             gdn_recurrence(state, m.hbuf, m.gate, m.beta, m.z, (const float*) wnm->data, EPS, m.y, m.y_h, T, cs);
