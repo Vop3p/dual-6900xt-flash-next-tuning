@@ -13,6 +13,7 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 
 ## Where it stands
 
+- **11-07 12:4x: `STRATA_DP_MIN` 12,288 → 9,216** on the same binary: prompts of 9.2K–12.3K read +7~21% (E712), shorter and longer ones unchanged; gate 12/12 (E714). Details: [DP threshold](#dp-threshold-11-07-e712-e714).
 - **Production (since 11-06 22:3x, the merged kernel batch):** `strata-0211wl2-1a996f63` = the 09:40 build below + the 11-06 kernel batch (`patches/strata/0002`; the int8 hc copies on Q8_0's grid, `STRATA_HC_PERSIST_Q8=2`): prompt **2,301 / 2,628 / 2,636** at 31K / 128.5K / 256K, +5~9% over the 09:40 build and **+20~24%** over the 11-04 production from 16K to 256K, every point from 46K up above 2,500 (E705); deterministic 32K +7.3%, decode whole-run **+8.5%** (E703); standard benchmark 4K / 16K **1,234 / 2,124**, decode 80.7 / 85.5 (parallel 1, E707), gate 12/12; worst-case concurrent run with vision 9/9 (E704). Details: [the 11-06 section](#0211-mmq-activation-reads-and-the-merged-kernel-batch-11-06-e678e708).
 - **Production (11-06 09:40 – 22:3x, 0.2.11 + MMQ activation reads):** `strata-0211scal-9e10fd77` = Strata upstream **0.2.11** (03:16, flat, token-for-token identical to 0.2.10 with `--vram-reserve-later-mib 444`, E678) + a ggml patch that reads the MMQ activations wave-uniformly (E685): prompt **2,160 / 2,507** at 32K / 128K (+2.8~4.9% from 4K to 128K, 1–2K flat), decode flat, gate 12/12.
 - **Production (since 11-06 00:57 on 0.2.10 + on-demand DP):** `strata-0210dp-e6e76570` = Strata upstream **0.2.10** merged into the local patch set (flat against 0.2.9, E645) with `STRATA_SIDE_MIXER=2` (decode +3%) and `--spec-min-p 0.6` (11-03), plus upstream PR #5002's data-parallel prompt read with our changes on top: prompt **1,858 / 2,094 / 2,425** at 16K / 32K / 128K (+8~10%), decode unchanged, gate 12/12. Card-to-card copies need the cards awake *and* BIOS Preferred IO = Manual. Details: [the 11-03 – 11-06 section](#0210-on-demand-dp-prompt-read-and-the-card-to-card-collapse-11-03--11-06-e645e677).
@@ -51,6 +52,21 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 - **Whole journey, same IQ3_S model:** decode 26 → ~80 tok/s (≈3×), 32K–37K prompt 274 → 1,790 tok/s (≈6.5×), 128K 821 (0.1.39) → 2,158. The engine switch (llama.cpp → Strata) is most of it; the patches and configuration after that roughly doubled the prompt (37K 714 → 1,433 → 1,705; 32K 1,790 and 128K 2,158 on 10-20) and added about +40% decode (56–58 → 80).
 - **Closed directions (measured; do not retry on this box):** every decode-side configuration knob — `--kv-resident` shrink (E382), `--pipeline-windows 2` alone (E384, +1–6%), the 16-point `--spec` × `--spec-min-p` grid at `--pipeline-windows 1` (E385, 4/0.5 is the peak of accepted tokens per window) — **but the combination works**: `--spec 3 --spec-min-p 0.7 --pipeline-windows 2` decodes +10–16% at 4K and +8–11% at 32K (E387, three confirmation rounds; the short draft is accepted 83% of the time instead of 68%, so the speculative second window hits). Prompt speed unchanged; output differs between starts (the baseline is deterministic); 128K +11% in the no-vision-encoder configuration (E388); in production since 10-09 00:16; batch slots as evaluated on 10-08 (resident experts 41% < upstream's 50% gate, slots decode without MTP; **overturned 10-15**: with slot drafts, the solo path kept pipelined and later #2985, `"parallel": 2` is production); MMQ tile / stream-K for IQ3_S (E279/E280); `--prefill` chunks other than 8192 (E296); tensor parallel (E234, +6%); and the upstream opt-ins that upstream itself measured as neutral or negative on small cards (chunked GDN, Foresight swap slots, pinned stage buffers).
 - **What is left:** the PCIe topology for long prompts (x8/x8 kept: on Strata a long prompt waits on PCIe only 0.2–0.7% of the time; a <2K one ~6–13% on 0.2.9, E634 - E482's 43–54% is overturned); more expert swaps per decode window (E499: the adaptive cache already hits 85%, a perfect 8-window predictor would not beat it at today's swap rate - the swap budget is the lever, untested). Four PRs wait for upstream review on 0.2.0-beta (#3381, #3382, and #3073 / #3095 reopened 10-20 with the E503 numbers).
+
+## DP threshold (11-07, E712, E714)
+
+`STRATA_DP_MIN` decides from which prompt length the two cards read one prompt together. Production had it at 12,288 since the DP build and it had never been swept. E712 swept it on the production binary (`strata-0211wl2-1a996f63`, production json without vision and `--batch-mtp`, parallel 1), arms 12,288 / 8,448 / 9,728 in the order Z A B B A Z, two reads per length per arm, prompt tok/s medians of four:
+
+| Prompt | 12,288 (old) | 8,448 | 9,728 | 8,448 vs old |
+|---|---|---|---|---|
+| 8,704 | 1,562 | 1,529 | 1,542 (no DP) | −2% (DP on, slower) |
+| 9,216 | 1,605 | 1,722 | 1,601 (no DP) | **+7%** |
+| 9,728 | 1,606 | 1,766 | 1,755 | **+10%** |
+| 10,240 | 1,631 | 1,819 | 1,821 | **+12%** |
+| 11,264 | 1,582 | 1,908 | 1,908 | **+21%** |
+| 12,288 | 1,986 | 1,985 | 1,984 | 0 (DP in all three) |
+
+At 9,216 the four DP reads were 1,718–1,730 and the four layer-split reads 1,585–1,609, no overlap. Decode after the read (ms per window) moved −4.6~+3.6% with no direction. Just above 8.4K DP loses (each card reads every layer, and the chunks are too short to pay for it); from ~9K it wins. **Production since 11-07 12:4x: `STRATA_DP_MIN=9216`** in the three slots (E714: gate 12/12, 0 stalls; a 10,532-token request through the proxy read at 1,816 tok/s against 1,631 before). In this box's request log 8.4K–12.3K is 11% of fresh reads, so the whole prompt time moves about 1%. Raw values: `data/linux-dp-min-0.2.11.csv`.
 
 ## 0.2.11, MMQ activation reads, and the merged kernel batch (11-06, E678–E708)
 
@@ -99,7 +115,7 @@ Together (E703): ctest 224 with only the three known failures; deterministic pro
 | 204.8K | 2,208 | 2,519 | 2,646 | 2,346 | +19.9% | +12.8% |
 | 256K | 2,187 | 2,516 | **2,636** | 2,362 | +20.5% | +11.6% |
 
-The merged build is +5~9% over 0211scal at every point above 5K and +20~24% over the 11-04 production from 16K to 256K; every point from 46K up is above 2,500 (plateau ~2,630–2,670). Below 12,288 tokens DP does not engage (`STRATA_DP_MIN`), so 5.6K / 10.8K show the kernels alone. DP against layer split on the same build: ≤11K flat, 16K–26K +16~19%, 31K–67K +10~15%, 72K–123K +16~26%, 154K–256K +12~17% - more than on 0.2.10 (E675: +7.7% at 16K, +10.4% at 128K); why was not measured. The prompt read does not go through the hc read, so the curve holds for either hc grid (it ran with the coarser one). The 512-token point is cold-start noise and left out.
+The merged build is +5~9% over 0211scal at every point above 5K and +20~24% over the 11-04 production from 16K to 256K; every point from 46K up is above 2,500 (plateau ~2,630–2,670). Below 12,288 tokens DP did not engage at the time (`STRATA_DP_MIN`; 9,216 since 11-07, see above), so 5.6K / 10.8K show the kernels alone. DP against layer split on the same build: ≤11K flat, 16K–26K +16~19%, 31K–67K +10~15%, 72K–123K +16~26%, 154K–256K +12~17% - more than on 0.2.10 (E675: +7.7% at 16K, +10.4% at 128K); why was not measured. The prompt read does not go through the hc read, so the curve holds for either hc grid (it ran with the coarser one). The 512-token point is cold-start noise and left out.
 
 **One card (E706, the E643 one-card config, five prompt lengths):**
 

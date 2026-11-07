@@ -15,7 +15,7 @@
 
 | 你的机器 | 结果 | 看这里 |
 |---|---|---|
-| **2× RX 6900 XT，Linux**（Ryzen 5 5600X、128 GB、各 PCIe 4.0 x8） | 两张卡一起读同一个 prompt：31K / 128K / 256K **2,301 / 2,628 / 2,636** tok/s（0.2.11 + 补丁 + 按需 DP + MMQ 激活读法 + 11-06 内核批，11-06 22:3x 起上生产；16K 到 256K 比 11-04 生产 +20~24%），内核批之前解码 32K **82**、4K **88**，内核批整轮再 **+8.5%**；标准基准 4K / 16K **1,234 / 2,124**、解码 81 / 86（0.2.7 原版包 829 / 1,356）；相对 llama.cpp：解码约 3 倍、32K 读 prompt 约 8 倍 | [docs/linux-dual-6900xt.zh-CN.md](docs/linux-dual-6900xt.zh-CN.md) |
+| **2× RX 6900 XT，Linux**（Ryzen 5 5600X、128 GB、各 PCIe 4.0 x8） | 两张卡一起读同一个 prompt：31K / 128K / 256K **2,301 / 2,628 / 2,636** tok/s（0.2.11 + 补丁 + 按需 DP + MMQ 激活读法 + 11-06 内核批，11-06 22:3x 起上生产；16K 到 256K 比 11-04 生产 +20~24%），内核批之前解码 32K **82**、4K **88**，内核批整轮再 **+8.5%**；11-07 起 9.2K 以上就两卡一起读（原为 12.3K，9.2K–12.3K 快 7~21%）；标准基准 4K / 16K **1,234 / 2,124**、解码 81 / 86（0.2.7 原版包 829 / 1,356）；相对 llama.cpp：解码约 3 倍、32K 读 prompt 约 8 倍 | [docs/linux-dual-6900xt.zh-CN.md](docs/linux-dual-6900xt.zh-CN.md) |
 | **一张 RX 6000，Windows**（6800 / 6800 XT / 6900 XT / 6950 XT / 6700 XT） | 官方包只改设置：16K 读 prompt **479 → 1,076**，解码 **28 → 42**；一个 PowerShell 脚本装好 | [windows-rx6000/](windows-rx6000/README.md)（懒人包，英文）· [docs/windows-one-card.zh-CN.md](docs/windows-one-card.zh-CN.md)（怎么调出来的） |
 | **llama.cpp 跑稠密 Qwen3.8-27B**，双卡 | 32K 读 prompt 731，解码短上下文 62 / 32K 44；8 个 RDNA2 llama.cpp 补丁 | [docs/27b-llamacpp.zh-CN.md](docs/27b-llamacpp.zh-CN.md) · [patches/llama.cpp/](patches/llama.cpp/README.md) |
 
