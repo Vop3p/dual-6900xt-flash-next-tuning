@@ -9,30 +9,29 @@
   <img alt="每一版生产的读 prompt 与解码速度" src="speed-chart-light.png" width="100%">
 </picture>
 
-## 现在（2026-11-07）
+## 现在（2026-11-13）
 
 | | |
 |---|---|
-| 引擎 | `strata-0211wl2-1a996f63`：Strata 上游 **0.2.11** + 我们的补丁（[`patches/strata/`](../patches/strata/README.md)：0001 按需 DP 读，0002 11-06 内核批）+ 打了 [`patches/llama.cpp/`](../patches/llama.cpp/README.md) 的 llama.cpp ggml |
+| 引擎 | `strata-0211fz-72bb0be6`：Strata 上游 **0.2.11** + 我们的补丁（[`patches/strata/`](../patches/strata/README.md)：0001 按需 DP 读，0002 11-06 内核批，0003 槽懒借 / hc 只存 int8 / 显存校准 / 弹性看图，0004 六个解码融合）+ 打了 [`patches/llama.cpp/`](../patches/llama.cpp/README.md) 的 llama.cpp ggml |
 | 模型 | GSQ-RCO IQ3_S，上下文 262,144，KV int8 |
-| 两张卡 | 分层 27 / 21，稠密权重裁剪；**9,216 token 及以上**的 prompt 两张卡一起读（按需 DP） |
+| 两张卡 | 分层 27 / 21，稠密权重裁剪；**9,216 token 及以上**的 prompt 两张卡一起读（按需 DP）；看图编码器只在读图时借显存，并且只用一个硬件队列 |
 | 解码 | `--spec 3 --spec-min-p 0.6 --pipeline-windows 2`，两个槽（`--parallel 2 --batch-mtp`），贪心采样 |
-| 检查 | Strata 标准门 12/12、0 停转；带图片的最坏并发压测 9/9 |
+| 检查 | Strata 标准门 12/12、0 停转（E772）；连续 27 张图 0 停转、OCR 不变（E796） |
 
 **读 prompt 速度（tok/s）**
 
 | 长度 | tok/s | 来源 |
 |---|---|---|
-| 4K | 1,234 | 标准基准，parallel 1（E707） |
-| 10.5K | 1,816 | 改 DP 门槛后经代理实发一条（E714；改前 1,631） |
-| 16K | 2,124 | 标准基准，parallel 1（E707） |
-| 31K | 2,301 | E659 代码语料，生产并发配置（E705） |
-| 128.5K | 2,628 | 同上（E705） |
-| 256K | 2,636 | 同上（E705） |
+| 4K | 1,235 | 门测，生产配置（E772） |
+| 16K | 2,104 | 同上（E772） |
+| 32K | 2,393–2,398 | `bench/benchmark.py`，parallel 1，三次冷启动（E799） |
+| 128K | 2,652 | 生产配置（E772） |
+| 250K | 2,645 | 同上（E772） |
 
-46K 以上每个点都 >2,500。**解码：**标准基准 80.7 / 85.5 tok/s（4K / 16K，parallel 1，E707）；11-06 内核批把每个验证窗从 25.0 ms 降到 22.9 ms，每窗 token 数不变（+8.5%，24 条真实请求重放，E703）。
+**解码：**4K 93.6–98.6 tok/s、32K 102.7–108.3（`bench/benchmark.py`，parallel 1，每档两次、三次冷启动，E799）；128K / 250K prompt 之后 82.9 / 84.4（E772）。一个验证窗 22.0–22.2 ms（11-06 内核批之前 25.0，11-07 开看图时 23.5）。
 
-**从头算：**同一个模型，解码 26 → 81–86 tok/s（09-21 的 llama.cpp → 现在），32K 读 prompt 274 → 2,301 tok/s。
+**从头算：**同一个模型，解码 26 → 94–108 tok/s（09-21 的 llama.cpp → 现在，短 prompt），32K 读 prompt 274 → 约 2,400 tok/s。
 
 ## 复现
 
@@ -40,7 +39,8 @@
 
 - **必须贪心采样。**模型卡的 `presence_penalty` 一生效，流水线解码就会自己关掉，日志写 "decodes serially"（E528）。运行配置里把采样温度和 presence penalty 都设成 0。
 - **每个开关都要在引擎日志里确认。**原版引擎遇到不认识的 `STRATA_*` 开关会静默忽略。
-- **显存很紧。**卡 0 装完只剩约 430 MiB。单张 16 GB 卡上不要开 `STRATA_HC_PERSIST_Q8`（副本占 641 MiB，两次冷启动有一次草稿头装不下，E706）。
+- **显存很紧。**开 `STRATA_VRAM_CALIB=1` 时，每张卡只留自己测到的缓存后需求 + 192 MiB（装完约 300–380 MiB）。校准没见过的显存占用（加了新功能、手改了配置）会直接吃掉这点余量；改动后删掉校准文件。单张 16 GB 卡上不要开 `STRATA_HC_PERSIST_Q8`（副本占 641 MiB，E706）。
+- **看图编码器只给一个硬件队列**（只对 `strata-vision` 设 `GPU_MAX_HW_QUEUES=1`）。否则引擎加编码器会超出卡 0 的硬件队列槽位，带图请求可能永久停住（#267，E795/E796）。
 
 ## 哪些步骤起了作用
 
@@ -54,6 +54,9 @@
 | 按需 DP：两张卡一起读一个长 prompt | 0.2.10 上 +8~10%；现在的版本 16K–256K 比分层 +10~26% | 11-06（E675、E705b） |
 | DP 门槛 12,288 → 9,216 | 9.2K–12.3K 的 prompt +7~21% | 11-07（E712） |
 | 11-06 内核批（FP16 不展宽、int8 hc 副本、单 warp GEMV、专家布局表、融合 SwiGLU） | 读 8K +4.3%、32K +7.3%；解码 +8.5% | 11-06（E703） |
+| 解码融合（`0004`：路由器写门铃、合并等待、拷贝里改指针、gate/up 并 SwiGLU、GDN/hc 输入用 q8_1） | 每窗 −1.3% | 11-11（E765、E772） |
+| hc 只存 int8 + 弹性看图编码器 + 显存校准（`0003`） | 开看图时每窗 −5.6%，专家槽 +410 / +1,160 | 11-09（E719、E739） |
+| 槽会话懒借（`STRATA_SLOT_LAZY=1`） | 单请求解码每窗 −4.7% | 11-07（E717） |
 | `--prefill-pipe` + 分块下限 | 8K +16%、12K +8%，之后 7K–20K 再 +3~8% | 10-29（E613、E617） |
 | GDN 组 + `STRATA_DEQUANT_WIDE=1` | 读 prompt +5~12% | 10-30（E621–E624） |
 | MMQ 激活按 wave 统一读（ggml 补丁） | 4K 到 128K 读 +2.8~4.9% | 11-06（E685） |
@@ -63,14 +66,14 @@
 
 ## 已否决
 
-在这台机器上实测后关闭的：张量并行、双卡 DFlash2、把第二张卡当专家缓存（`--peer-device`）、PCIe x16+x4、GPU 与 CPU 超频、单独调解码参数，以及 11-06 那批没回本的内核想法。带原因的清单在 [`AGENTS.md`](../AGENTS.md)（"Do not retry"）；其中一些背后的错误在 [mechanisms.zh-CN.md](mechanisms.zh-CN.md)。
+在这台机器上实测后关闭的：张量并行、双卡 DFlash2、把第二张卡当专家缓存（`--peer-device`）、PCIe x16+x4、GPU 与 CPU 超频、单独调解码参数，11-06 那批没回本的内核想法，以及（11-09 – 11-13）给引擎加硬件队列、把草稿模型挪到第一张卡、用新固件对付 #267、上游的 Foresight 换入区（把专家提前拷进额外的显存槽：排掉一个绑核陷阱后净 +0.5% 到 −2.6%；槽和专家缓存抢同一块显存，见[历史](linux-history.zh-CN.md)）。带原因的清单在 [`AGENTS.md`](../AGENTS.md)（"Do not retry"）；其中一些背后的错误在 [mechanisms.zh-CN.md](mechanisms.zh-CN.md)。
 
 ## 待办
 
-- **Strata 0.2.12（11-07）还没评估。**对本机有意义的：按 stage 复制 hyper-connection 行（#3559，两张 A6000 上每卡省 414 MiB），以及两张 AMD 卡在 `--pipeline-windows 2` 下首个请求卡死的修复（#5149）。
-- **张量并行读 prompt** 现在只能补 6K–9.2K（DP 门槛以下）：深睡档测试里 6–8K +44~48%（E710），约占读 prompt 总时间 +1~2%（估算）。未移植。
-- 11-06 内核批的三个 PR 已在上游开为草稿：[#5474](https://github.com/Niko1221/Strata/pull/5474)、[#5475](https://github.com/Niko1221/Strata/pull/5475)、[#5476](https://github.com/Niko1221/Strata/pull/5476)。
+- **Strata 0.2.12（11-07）和 0.2.13（11-09）还没评估。**对本机有意义的：按 stage 复制 hyper-connection 行（#3559），以及两张 AMD 卡在 `--pipeline-windows 2` 下首个请求卡死的修复（#5149）。
+- **上游的线程绑核：**不开 `STRATA_PIPED_CONCURRENT` 时，主机线程绑核之后建的线程（stage、watchdog、Foresight 填充线程）全都和主机线程共用它那一个 CPU。它们闲着时无害；这里因此白测了一整串 Foresight 实验。尚未报上游。
+- 上游草稿：[#5474](https://github.com/Niko1221/Strata/pull/5474)、[#5475](https://github.com/Niko1221/Strata/pull/5475)、[#5476](https://github.com/Niko1221/Strata/pull/5476)（11-06 内核批）、[#5691](https://github.com/Niko1221/Strata/pull/5691)（显存校准）、[#5698](https://github.com/Niko1221/Strata/pull/5698)（编码器跳过预热）、[#5897](https://github.com/Niko1221/Strata/pull/5897)（看图编码器环境变量，用于单队列修复）。
 
 ## 历史
 
-[linux-history.zh-CN.md](linux-history.zh-CN.md)，新的在前：DP 门槛（11-07）；0.2.11、MMQ 激活读法与内核批（11-06）；0.2.10 与按需 DP 读（11-03 – 11-06）；0.2.8 → 0.2.9（10-30 – 11-02）；读 prompt 随长度、SH_STREAM / KVA、稠密权重裁剪（10-29）；时间花在哪：原版对比调优后（E505）；单卡、helper 与分层。每一步的日期清单在 [timeline.zh-CN.md](timeline.zh-CN.md)。
+[linux-history.zh-CN.md](linux-history.zh-CN.md)，新的在前：槽懒借、0211vx、解码融合、#267 看图停转与 Foresight（11-07 – 11-13）；DP 门槛（11-07）；0.2.11、MMQ 激活读法与内核批（11-06）；0.2.10 与按需 DP 读（11-03 – 11-06）；0.2.8 → 0.2.9（10-30 – 11-02）；读 prompt 随长度、SH_STREAM / KVA、稠密权重裁剪（10-29）；时间花在哪：原版对比调优后（E505）；单卡、helper 与分层。每一步的日期清单在 [timeline.zh-CN.md](timeline.zh-CN.md)。

@@ -1,10 +1,10 @@
-# History: two RX 6900 XT under Linux, 09-21 → 11-07
+# History: two RX 6900 XT under Linux, 09-21 → 11-13
 
 [← Current state](linux-dual-6900xt.md) · [README](../README.md) · [中文](linux-history.zh-CN.md)
 
 The full log, newest first. The short version (what runs now, how to reproduce it, which steps mattered) is [linux-dual-6900xt.md](linux-dual-6900xt.md). "Where it stands" below is kept as written at each production change.
 
-Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AMD RX 6900 XT (gfx1030, PCIe 4.0 x8 each) / Ryzen 5 5600X / 128 GB DDR4**, ROCm 10.0 — from llama.cpp to [Strata](https://github.com/Niko1221/Strata), 2026-09-21 → 11-06; plus one RX 6900 XT under Windows 11 ([Windows notes](windows-one-card.md)). Experiment numbers (E…) refer to the author's lab notebook (not public). Every number is measured on this machine unless marked as an estimate.
+Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AMD RX 6900 XT (gfx1030, PCIe 4.0 x8 each) / Ryzen 5 5600X / 128 GB DDR4**, ROCm 10.0 — from llama.cpp to [Strata](https://github.com/Niko1221/Strata), 2026-09-21 → 11-13; plus one RX 6900 XT under Windows 11 ([Windows notes](windows-one-card.md)). Experiment numbers (E…) refer to the author's lab notebook (not public). Every number is measured on this machine unless marked as an estimate.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="speed-chart-en-dark.png">
@@ -15,6 +15,9 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 
 ## Where it stands
 
+- **Production (since 11-11 22:3x, decode fusions):** `strata-0211fz-72bb0be6` = 0211vx below + `patches/strata/0004` (six opt-in decode fusions, DP refused-block fix, VMM placement check, calibration fixes): −1.3% per window over 0211vx in the production config (three pairs), tokens per ms flat, 12/12; 4K / 16K prompt 1,235 / 2,104, 128K / 250K 2,652 / 2,645 with decode 82.9 / 84.4 (E772). Since **11-12 22:2x** the picture encoder runs with one hardware queue ([#267](#the-267-picture-stall-11-11--11-12-e781e797)). Details: [decode fusions](#decode-fusions-11-11-e759e772).
+- **Production (11-09 16:1x – 11-11, 0211vx):** `strata-0211vx-006a704b` = 0211lz + `0003` (hc int8-only, VRAM ledger + calibration, DP staging borrow, VMM per device, elastic picture encoder): with pictures enabled −5.6% per window, tokens per ms +6.6%, expert slots +410 / +1,160 over 0211lz (E739). Details: [0211vx](#0211vx-11-09-e719e739).
+- **Production (11-07 21:0x – 11-09, lazy slots):** `strata-0211lz-2d7e262a` = 0211wl2 + `STRATA_SLOT_LAZY=1`: single-request decode −4.7% per window (E717).
 - **11-07 12:4x: `STRATA_DP_MIN` 12,288 → 9,216** on the same binary: prompts of 9.2K–12.3K read +7~21% (E712), shorter and longer ones unchanged; gate 12/12 (E714). Details: [DP threshold](#dp-threshold-11-07-e712-e714).
 - **Production (since 11-06 22:3x, the merged kernel batch):** `strata-0211wl2-1a996f63` = the 09:40 build below + the 11-06 kernel batch (`patches/strata/0002`; the int8 hc copies on Q8_0's grid, `STRATA_HC_PERSIST_Q8=2`): prompt **2,301 / 2,628 / 2,636** at 31K / 128.5K / 256K, +5~9% over the 09:40 build and **+20~24%** over the 11-04 production from 16K to 256K, every point from 46K up above 2,500 (E705); deterministic 32K +7.3%, decode whole-run **+8.5%** (E703); standard benchmark 4K / 16K **1,234 / 2,124**, decode 80.7 / 85.5 (parallel 1, E707), gate 12/12; worst-case concurrent run with vision 9/9 (E704). Details: [the 11-06 section](#0211-mmq-activation-reads-and-the-merged-kernel-batch-11-06-e678e708).
 - **Production (11-06 09:40 – 22:3x, 0.2.11 + MMQ activation reads):** `strata-0211scal-9e10fd77` = Strata upstream **0.2.11** (03:16, flat, token-for-token identical to 0.2.10 with `--vram-reserve-later-mib 444`, E678) + a ggml patch that reads the MMQ activations wave-uniformly (E685): prompt **2,160 / 2,507** at 32K / 128K (+2.8~4.9% from 4K to 128K, 1–2K flat), decode flat, gate 12/12.
@@ -54,6 +57,47 @@ Tuning log for **Qwen3.8-Flash-Next (GSQ-RCO IQ3_S)** on a home box with **2x AM
 - **Whole journey, same IQ3_S model:** decode 26 → ~80 tok/s (≈3×), 32K–37K prompt 274 → 1,790 tok/s (≈6.5×), 128K 821 (0.1.39) → 2,158. The engine switch (llama.cpp → Strata) is most of it; the patches and configuration after that roughly doubled the prompt (37K 714 → 1,433 → 1,705; 32K 1,790 and 128K 2,158 on 10-20) and added about +40% decode (56–58 → 80).
 - **Closed directions (measured; do not retry on this box):** every decode-side configuration knob — `--kv-resident` shrink (E382), `--pipeline-windows 2` alone (E384, +1–6%), the 16-point `--spec` × `--spec-min-p` grid at `--pipeline-windows 1` (E385, 4/0.5 is the peak of accepted tokens per window) — **but the combination works**: `--spec 3 --spec-min-p 0.7 --pipeline-windows 2` decodes +10–16% at 4K and +8–11% at 32K (E387, three confirmation rounds; the short draft is accepted 83% of the time instead of 68%, so the speculative second window hits). Prompt speed unchanged; output differs between starts (the baseline is deterministic); 128K +11% in the no-vision-encoder configuration (E388); in production since 10-09 00:16; batch slots as evaluated on 10-08 (resident experts 41% < upstream's 50% gate, slots decode without MTP; **overturned 10-15**: with slot drafts, the solo path kept pipelined and later #2985, `"parallel": 2` is production); MMQ tile / stream-K for IQ3_S (E279/E280); `--prefill` chunks other than 8192 (E296); tensor parallel (E234, +6%); and the upstream opt-ins that upstream itself measured as neutral or negative on small cards (chunked GDN, Foresight swap slots, pinned stage buffers).
 - **What is left:** the PCIe topology for long prompts (x8/x8 kept: on Strata a long prompt waits on PCIe only 0.2–0.7% of the time; a <2K one ~6–13% on 0.2.9, E634 - E482's 43–54% is overturned); more expert swaps per decode window (E499: the adaptive cache already hits 85%, a perfect 8-window predictor would not beat it at today's swap rate - the swap budget is the lever, untested). Four PRs wait for upstream review on 0.2.0-beta (#3381, #3382, and #3073 / #3095 reopened 10-20 with the E503 numbers).
+
+
+## Lazy slots, 0211vx, decode fusions, #267, Foresight (11-07 – 11-13)
+
+### Lazy slots (11-07, E716–E717)
+
+Single-request decode was ~5% slower with `--parallel 2` than with one slot, and the batch-MTP path itself cost nothing (E716b): the two slot sessions held ~530 expert slots per card. `STRATA_SLOT_LAZY=1` keeps the slot sessions in a fixed region at the head of each card's cache and borrows it only while a slot is in use (the coldest experts move out, ~20 ms; given back after the next single request, ~144 ms; the RoPE tables are shared with the main session). Single-request decode −4.7% per window (3/3), gate 12/12, two 160-request streams 7 s apart 0 stalls.
+
+### 0211vx (11-09, E719–E739)
+
+- **hc int8-only** (`STRATA_HC_I8ONLY=1`): the persistent hc read keeps only its int8 copies: slots +293 / +205, −3.2% per window, decode bitwise equal (E719).
+- **VRAM ledger and calibration** (`STRATA_VRAM_CALIB=1`, E721–E724): every allocation is booked; at the seal each card's need after the expert cache is measured and the next start keeps exactly that plus 192 MiB free instead of fixed reserves. Upstream draft #5691.
+- **Elastic picture encoder** (E730–E733, E739): the encoder borrows VRAM from the cache only while a picture is read and gives it back; a DP prompt read can give way at any chunk boundary (`STRATA_DP_YIELD=2`). On the way we hit an amdgpu bug: after an unmap and a map at the same address the GPU wrote to stale pages (E730; TheRock#8744), so VMM remaps flush.
+- In the production config with pictures, against 0211lz: −5.6% per window, tokens per ms +6.6%, slots +410 / +1,160 (the resident encoder took ~1.9 GiB on card 1). Cost: the first picture after 120 s idle takes 5.6 s instead of ~2 s.
+
+### Decode fusions (11-11, E759–E772)
+
+Six opt-in fusions cut the graph from 1,056 to 865 nodes per window (E765): the router writes the doorbell itself, the hc read quantises its own input, one launch for the plan wait and copy, the expert pointers rebased inside the copy launch, gate/up fused with SwiGLU, the GDN projections on q8_1 input. Output byte-identical with fixed routing. In production: −1.3% per window (E772, three pairs). With it came a VMM placement check: card-0 chunks were intermittently placed on card 1, which made the calibration write a need of 0 (E769, E771).
+
+### The #267 picture stall (11-11 – 11-12, E781–E797)
+
+Requests with pictures occasionally stalled for good (issue #267, also #4668). A reproducer stalled within 2–17 pictures, every time with "Runlist is getting oversubscribed" in the kernel log: engine plus picture encoder had more hardware queues on card 0 than the hardware scheduler has slots. `GPU_MAX_HW_QUEUES=1` for the encoder process only: 27 pictures in a row, 0 oversubscription, 0 stalls, OCR unchanged (E795); production config 12/12 and 128K 2,654 (E796). Earlier workarounds (`HSA_ENABLE_SDMA=0`, `--adapt-swaps 0`) worked only because they happened to lower the queue count. Upstream MEC / SDMA firmware 0x86 / 0x58 does not fix the stall under oversubscription (E797). The last link (a completion signal decremented twice when a queue is preempted) is inferred, not observed.
+
+### Closed (11-12 – 11-13)
+
+- Engine `GPU_MAX_HW_QUEUES=5`: −4.1% per window, three pairs (E799); with 2 (E420) slower and with pictures deadlocked (E793). 4 stays.
+- The draft model on the first card (`STRATA_MTP_STAGE0=1`): −13.4% (E798).
+
+### Foresight swap space (11-13, E803–E820)
+
+Upstream's Foresight (`STRATA_FS_SLOTS`) keeps a few VRAM slots per layer outside the expert cache and copies experts that just missed (and, with `STRATA_FS_AHEAD`, experts the router look-ahead predicts) into them; a slot whose copy landed is used like a cache hit. The motivation: the hidden-state predictor covers 56.5% of the misses at 37.4% precision (E800), and each CPU miss costs ~64 µs of window time (E802a: the window cost follows the number of misses, unlike #1348's machine).
+
+What happened, in order:
+
+1. **Deadlock:** every run with `STRATA_FS_VERIFY=1` stalled (E803–E807); the filler's synchronous read-back blocks the pipelined decode. Without it 0 stalls (E809).
+2. **A fixed ~8.5 ms per window:** every budget (2 / 8 / 32 copies per card and window) and the predictor on or off were 26–43% slower (E809–E811). VRAM margin was ruled out (the calibration's ~300 MiB free is the design value; production is as fast at 354 / 380 MiB). GPU stage stamps (`STRATA_VERIFY_PROFILE`) put the whole difference into **waitA**, the GPU waiting for the host's plan (+5 ms per card and window), with the compute stages unchanged (E812).
+3. **The cause was thread placement, not Foresight:** `/proc/<pid>/task/*/status` showed the filler, six stage threads, stdin and watchdog all allowed only on CPU 0, the host thread's own core (E813). Threads the host creates after it pins itself inherit its single CPU; `release_host_inheritors()` moves them off only on the `STRATA_PIPED_CONCURRENT` path, which Foresight turns off. The filler busy-waits (`cudaEventSynchronize` without `BlockingSync`) on the host's core each time a miss wakes it, delaying the plan and the host's share of the CPU experts (the five workers spin at the pool barrier meanwhile). Moving that one thread with `taskset` brought the window from 29.44 to 22.38 ms, the baseline was 22.50 (E814).
+4. **Then no net gain:** budgets 2 / 8 / 32 with the filler moved ran between 0.5% faster and 2.6% slower than same-session baselines (six arms, `data/linux-foresight-e810-e819.csv`); CPU misses fell 6–15%, but each remaining CPU expert cost 17–21% more. The CPU router look-ahead accounted for about half of that and removed no misses (off: 1.26 per layer-window, on: 1.24–1.25; E819). `perf` ruled out "the remaining misses are colder": memory fills per CPU expert entry were equal (5,039 vs 5,068), the host thread's demand fills from memory rose 48% (E817). At budget ≥ 8 with full-speed copies, a long prompt read faulted on card 1 in 3 of 5 runs (`gr_down_staged`, not investigated).
+5. **Paper estimate for a rewrite** (GPU predictor, copies outside the CPU phase, E820): PCIe and memory bandwidth suffice (7–10 GB/s of DMA, 0.3–0.4 ms per layer against ~0.8 ms of lead), but in production the slots must come out of the expert cache, and the cache's routing profile is flat: each slot taken costs ~0.06 misses per layer-window. Net ~2–3% (optimistic 4%) for several days of work. The tests looked better because the calibration had put the slots into the VRAM margin (106–308 MiB free, LOW).
+
+Closed. It would come back with more VRAM per card (slots that do not shrink the cache: 5–9%, estimate) or a predictor with ≥70% recall at ≥40% precision. My mistakes here: three experiments spent on "Foresight costs a fixed 8.5 ms" before reading thread placement from `/proc` (two commands); a prize estimate (E802a, 9%) that ignored wrong copies and where the slots' VRAM comes from; and two premature verdicts in both directions.
 
 ## DP threshold (11-07, E712, E714)
 

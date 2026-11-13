@@ -1,6 +1,6 @@
 # dual-6900xt-flash-next-tuning
 
-> Measured tuning of Qwen3.8-Flash-Next (GSQ-RCO IQ3_S, a MoE model) on AMD RX 6900 XT cards (RDNA2, gfx1030) with the Strata inference engine (https://github.com/Niko1221/Strata), 2026-09-21 to 2026-11-06: a two-card Linux box (ROCm 10.0) and one card under Windows 11; plus the dense Qwen3.8-27B on llama.cpp with eight RDNA2 llama.cpp patches. All numbers are measurements on these machines; estimates are marked. Experiment IDs (E123) refer to a private lab notebook.
+> Measured tuning of Qwen3.8-Flash-Next (GSQ-RCO IQ3_S, a MoE model) on AMD RX 6900 XT cards (RDNA2, gfx1030) with the Strata inference engine (https://github.com/Niko1221/Strata), 2026-09-21 to 2026-11-13: a two-card Linux box (ROCm 10.0) and one card under Windows 11; plus the dense Qwen3.8-27B on llama.cpp with eight RDNA2 llama.cpp patches. All numbers are measurements on these machines; estimates are marked. Experiment IDs (E123) refer to a private lab notebook.
 
 Start with AGENTS.md for how to reproduce and what not to retry. English docs are `*.md`, Chinese `*.zh-CN.md` (same content).
 
@@ -12,7 +12,7 @@ Start with AGENTS.md for how to reproduce and what not to retry. English docs ar
 - [windows-rx6000/README.md](windows-rx6000/README.md): the "lazy pack": a PowerShell script that installs the official Strata Terminal and rdna2 engine package with the measured settings; optional GPU picture reader.
 - [docs/27b-llamacpp.md](docs/27b-llamacpp.md): dense Qwen3.8-27B on llama.cpp (`-sm tensor`, two cards): production state, patches, profiling.
 - [patches/llama.cpp/README.md](patches/llama.cpp/README.md): the eight llama.cpp patches (RDNA2 MMQ, int8 QK^T flash attention), build flags, measured effects; plus `extra-mmq-y-scalar-rdna2.diff` (wave-uniform MMQ activation reads, used by Strata since 11-06).
-- [patches/strata/README.md](patches/strata/README.md): Strata patches: the on-demand DP prompt read (0001, on PR #5002 + dp-followups) and the 11-06 kernel batch (0002: FP16 without widening, int8 hc copies, gfx1030 decode tables, fused SwiGLU+quantize on HIP), with switches and measured effects.
+- [patches/strata/README.md](patches/strata/README.md): Strata patches: the on-demand DP prompt read (0001, on PR #5002 + dp-followups), the 11-06 kernel batch (0002), slots / hc int8-only / VRAM calibration / elastic picture encoder (0003), six decode fusions (0004); switches and measured effects.
 - [docs/timeline.md](docs/timeline.md): every step with date and measured effect.
 - [docs/mechanisms.md](docs/mechanisms.md): mechanisms that limit speed on these cards, and mistakes made (so they are not repeated).
 
@@ -22,6 +22,7 @@ Start with AGENTS.md for how to reproduce and what not to retry. English docs ar
 - [data/linux-breakdown-prompt-e505.csv](data/linux-breakdown-prompt-e505.csv), [data/linux-breakdown-decode-e505.csv](data/linux-breakdown-decode-e505.csv): per-phase time, stock vs tuned.
 - [data/linux-dp-0.2.10.csv](data/linux-dp-0.2.10.csv): layer pipeline vs on-demand DP prompt read on 0.2.10 (16K–128K prompt, 4K/32K decode).
 - [data/linux-steps-0.2.11.csv](data/linux-steps-0.2.11.csv): 11-06 steps 0.2.11 → MMQ activation reads → merged kernel batch, every run's value (long format).
+- [data/linux-foresight-e810-e819.csv](data/linux-foresight-e810-e819.csv): upstream Foresight swap space on two cards, every arm of E810–E819 with same-session baselines (window ms, GPU-reach wait, CPU experts and their cost; the filler thread on the host core vs moved).
 - [data/windows-steps.csv](data/windows-steps.csv): Windows one-card standard-benchmark steps.
 - [data/linux-modes-0.1.41-32k.csv](data/linux-modes-0.1.41-32k.csv): one card vs expert helper vs layer split.
 - [data/timeline-steps.en.csv](data/timeline-steps.en.csv), [data/timeline-steps.zh.csv](data/timeline-steps.zh.csv): every timeline step (English / Chinese).

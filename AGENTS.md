@@ -23,22 +23,25 @@ a fixed page file about the size of RAM, the model on local NVMe.
 
 ## Reproduce: two cards on Linux (the production configuration)
 
-Production since 2026-11-06 22:3x (`strata-0211wl2-1a996f63`): Strata upstream 0.2.11 + our patches + upstream PR #5002's DP prompt read + `patches/strata/0001`
-+ the 11-06 kernel batch `patches/strata/0002` (applied as one diff against `4783921b`, which already contains 0001),
+Production since 2026-11-11 22:3x (`strata-0211fz-72bb0be6`): Strata upstream 0.2.11 + our patches + upstream PR #5002's DP prompt read + `patches/strata/0001`
++ the 11-06 kernel batch `patches/strata/0002` (one diff against `4783921b`, which already contains 0001) + `0003` (slots, hc int8-only, VRAM calibration,
+elastic pictures; `git diff 3076edaf d86d3ec6`) + `0004` (decode fusions; one diff against `d86d3ec6`),
 built against llama.cpp ggml with `patches/llama.cpp/` 0001–0006 + `extra-mmq-y-scalar-rdna2.diff` (`-DCMAKE_HIP_FLAGS=-DGGML_CUDA_MMQ_Y_SCALAR`).
 Engine arguments of the production slot (paths replaced by `<…>`):
 
 ```
 --pack <iq3_s> --native <...IQ3_S-00001-of-00002.gguf> --ple-gguf <...IQ3_S-00002-of-00002.gguf>
 --expert-profile <expert-profile.bin> --expert-cache auto --prefill 16384 --spec 3 --spec-min-p 0.6 --mtp <rt>
---max-context 262144 --kv int8 --kv-resident 32768 --ple-io ram --vision --vram-reserve-mib 700
---pipeline-windows 2 --batch-mtp --conversation-cache-mib 0 --prefill-pipe 1600 --vram-reserve-later-mib 844 --mtp-q4 head
+--max-context 262144 --kv int8 --kv-resident 32768 --ple-io ram --vision --vram-reserve-mib 340
+--pipeline-windows 2 --batch-mtp --conversation-cache-mib 0 --prefill-pipe 1600 --vram-reserve-later-mib 564 --mtp-q4 head
 ```
 
-(`--vram-reserve-later-mib`: 0.2.11 reserves 256 MiB more on the later card; 444 + 256 = the old 700 keeps card 1's expert slots (E678), and the
-int8 hc copies add 400 → 844.)
+(With `STRATA_VRAM_CALIB=1` the two reserves only apply to a start that has no calibration yet; afterwards each card keeps what it measured
+after its cache plus 192 MiB free. Delete `~/.cache/strata/vram-calib/` after changing the build or the config by hand. A config with
+`STRATA_HC_I8ONLY=1` and fixed reserves needs 340 / 564.)
 
-Run config: `"backend": "hip"`, `"gpu": [1, 0]`, `"layer_split": 27`, `"parallel": 2`, sampling temperature 0 and
+Run config: `"backend": "hip"`, `"gpu": [1, 0]`, `"layer_split": 27`, `"parallel": 2`, `"vram_elastic": true`, vision `"elastic": true, "elastic_no_warmup": true, "cuda_device": 0`
+with `vision.exe` pointing to a wrapper that runs `strata-vision` under `GPU_MAX_HW_QUEUES=1` (two lines: `export GPU_MAX_HW_QUEUES=1` and `exec <dir>/strata-vision "$@"`; without it the two processes oversubscribe the hardware queues of card 0 and a request with pictures can stall, #267), sampling temperature 0 and
 presence penalty 0 (the pipelined decode needs greedy sampling; a model card's presence penalty silently turns it off - E528, logged as "decodes serially").
 
 Environment (beyond the earlier set `STRATA_HIP_PROMPT_F16=1 STRATA_HIP_ADAPT_KERNEL_COPY=1 STRATA_HC_PERSIST=1 STRATA_IO_THREADS=128
@@ -58,9 +61,14 @@ scale per 32 values) is not bitwise: top-10 overlap with a double reference −0
 Card 0 then has ~430 MiB free after loading. On **one** card the copies take 641 MiB and the draft head did not fit in one of two cold starts
 (E706): leave `STRATA_HC_PERSIST_Q8` off there, or free VRAM first.
 
-Expected (this concurrent config): prompt 2,301 / 2,525 / 2,628 / 2,636 tok/s at 31K / 62K / 128.5K / 256K (E705, the E659 corpus), 5.6K 1,282;
-decode whole-run +8.5% over the 09:40 build (E703); standard benchmark (parallel 1, E707) 4K / 16K 1,234 / 2,124, decode 80.7 / 85.5, 12/12.
-Rollback build: `strata-0211scal` (no 0002, `--vram-reserve-later-mib 444`, no kernel-batch switches): 2,160 / 2,507 at 32K / 128K (E685).
+Switches of `0003` / `0004` on top (11-07 – 11-11): `STRATA_SLOT_LAZY=1 STRATA_HC_I8ONLY=1 STRATA_VRAM_CALIB=1 STRATA_DP_YIELD=2 STRATA_DP_YIELD_SMALL=4096`
+and the six decode fusions `STRATA_ROUTE_BELL=1 STRATA_HCP_Q81=1 STRATA_FUSE_WAIT=2 STRATA_FETCH_REBASE=1 STRATA_GU_SWIGLU=1 STRATA_GDN_Q81=1`.
+Card 0 has ~300–380 MiB free after loading (the calibration's design: growth + 192 MiB).
+
+Expected (this config): gate run 4K / 16K prompt 1,235 / 2,104 tok/s, 128K / 250K 2,652 / 2,645 with decode 82.9 / 84.4, 12/12 (E772);
+`bench/benchmark.py` 4K / 32K, parallel 1, two runs each (E799, three cold starts): prompt 1,248–1,252 / 2,393–2,398, decode 93.6–98.6 / 102.7–108.3,
+22.0–22.2 ms per verify window. The 11-07 numbers (0211wl2) are in `docs/linux-history.md`.
+Rollback build: `strata-0211vx-006a704b` (no `0004`, no fusion switches): +1.3% per window (E772).
 
 **Card-to-card copies:** bidirectional P2P collapses to 3–4 GB/s a direction unless the cards are awake (display, or SMU deep sleep off)
 *and* BIOS Preferred IO = Manual. It only matters for idle copy-only loads. Never write `/sys/.../pp_features` while the driver runs
@@ -78,6 +86,12 @@ Rollback build: `strata-0211scal` (no 0002, `--vram-reserve-later-mib 444`, no k
 - GPU core / memory overclock (decode does not follow the clock, E507–E512); CPU and RAM speed (decode is GPU-bound: 6 → 4 CPU expert threads did not slow it, E524; not written up in docs/).
 - Windows: `STRATA_SH_STREAM` (slower, and stops the engine with KV streaming), large pages (error 1450 with 64 GB),
   a rocBLAS table made under Linux (refused), a VRAM reserve below ~1 GiB left free (pages, answers go wrong).
+- Closed 11-09 – 11-13: engine `GPU_MAX_HW_QUEUES=5` (−4.1% per window, E799; 4 is best, 2 deadlocks with pictures); the draft model on the first card
+  (`STRATA_MTP_STAGE0=1`, −13.4%, E798); MEC/SDMA firmware 0x86/0x58 against the #267 stall (still stalls, E797); KV window 8192 (E747);
+  asynchronous refill after a prompt read (E751, PCIe is zero-sum); the CPU activation quantised like the GPU's (`STRATA_CPU_ACT_Q81`, no end-to-end gain, E735–E737).
+- Foresight swap space (`STRATA_FS_SLOTS`, upstream) - closed after E803–E820, see `docs/linux-history.md` (11-13). Two traps worth knowing even
+  without FS: threads created after the host pins itself stay on the host's one CPU unless `STRATA_PIPED_CONCURRENT` is on (FS turns it off),
+  and `STRATA_FS_VERIFY=1` deadlocks the pipelined decode.
 - Full list with reasons: `docs/linux-history.md` ("Closed directions"), `docs/windows-one-card.md`,
   `docs/mechanisms.md` (mistakes).
 

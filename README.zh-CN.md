@@ -21,13 +21,13 @@
 
 ## 其他
 
-- [docs/timeline.zh-CN.md](docs/timeline.zh-CN.md)：09-21 到 11-07 的每一步和实测效果。
+- [docs/timeline.zh-CN.md](docs/timeline.zh-CN.md)：09-21 到 11-13 的每一步和实测效果。
 - [docs/mechanisms.zh-CN.md](docs/mechanisms.zh-CN.md)：这几张卡上速度卡在哪里，以及我在这上面犯过的错。
 - [data/](data/README.md)：每张图背后的数字（CSV）。
 - [bench/](bench/)：A/B 脚本（`run_ab.sh`、`benchmark.py`、`ab_compare.py`、`monitor_amd.py`），以及按实验编号存放的原始结果（`bench/results/eNNN/`）。
 - 这些机器发到上游的：
   - 基准报告：[#5454](https://github.com/Niko1221/Strata/pull/5454)（0.2.11 + 补丁）、#4602（0.2.7）、[#4012](https://github.com/Niko1221/Strata/pull/4012)（Windows）、[#3426](https://github.com/Niko1221/Strata/pull/3426)（0.2.0-beta）、#1927、#1657；
-  - 引擎 PR：草稿 [#5474](https://github.com/Niko1221/Strata/pull/5474)、[#5475](https://github.com/Niko1221/Strata/pull/5475)、[#5476](https://github.com/Niko1221/Strata/pull/5476)（11-06 内核批）、#5146；已合入或更早的 #4006（进了 0.2.12）、#4005、#3073、#3095、#3381、#3382；
+  - 引擎 PR：草稿 [#5474](https://github.com/Niko1221/Strata/pull/5474)、[#5475](https://github.com/Niko1221/Strata/pull/5475)、[#5476](https://github.com/Niko1221/Strata/pull/5476)（11-06 内核批）、[#5691](https://github.com/Niko1221/Strata/pull/5691)（显存校准）、[#5698](https://github.com/Niko1221/Strata/pull/5698)（编码器跳过预热）、[#5897](https://github.com/Niko1221/Strata/pull/5897)（看图编码器环境变量）、#5146；已合入或更早的 #4006（进了 0.2.12）、#4005、#3073、#3095、#3381、#3382；
   - DP 的发现贴在 [#5002](https://github.com/Niko1221/Strata/pull/5002)。
 
 实验编号（E…）对应作者的实验日志（未公开）。

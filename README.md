@@ -21,13 +21,13 @@ Measured tuning of **Qwen3.8-Flash-Next (IQ3_S)** on AMD RX 6900 XT (RDNA2, gfx1
 
 ## More
 
-- [docs/timeline.md](docs/timeline.md) — every step from 09-21 to 11-07 with its measured effect.
+- [docs/timeline.md](docs/timeline.md) — every step from 09-21 to 11-13 with its measured effect.
 - [docs/mechanisms.md](docs/mechanisms.md) — what limits speed on these cards, and the mistakes made on the way.
 - [data/](data/README.md) — the numbers behind every chart as CSV.
 - [bench/](bench/) — the A/B scripts (`run_ab.sh`, `benchmark.py`, `ab_compare.py`, `monitor_amd.py`) and raw results per experiment (`bench/results/eNNN/`).
 - Upstream, from these machines:
   - benchmark reports: [#5454](https://github.com/Niko1221/Strata/pull/5454) (0.2.11 + patches), #4602 (0.2.7), [#4012](https://github.com/Niko1221/Strata/pull/4012) (Windows), [#3426](https://github.com/Niko1221/Strata/pull/3426) (0.2.0-beta), #1927, #1657;
-  - engine PRs: drafts [#5474](https://github.com/Niko1221/Strata/pull/5474), [#5475](https://github.com/Niko1221/Strata/pull/5475), [#5476](https://github.com/Niko1221/Strata/pull/5476) (the 11-06 kernel batch), #5146; merged or earlier #4006 (in 0.2.12), #4005, #3073, #3095, #3381, #3382;
+  - engine PRs: drafts [#5474](https://github.com/Niko1221/Strata/pull/5474), [#5475](https://github.com/Niko1221/Strata/pull/5475), [#5476](https://github.com/Niko1221/Strata/pull/5476) (the 11-06 kernel batch), [#5691](https://github.com/Niko1221/Strata/pull/5691) (VRAM calibration), [#5698](https://github.com/Niko1221/Strata/pull/5698) (encoder warm-up), [#5897](https://github.com/Niko1221/Strata/pull/5897) (picture encoder environment), #5146; merged or earlier #4006 (in 0.2.12), #4005, #3073, #3095, #3381, #3382;
   - DP findings on [#5002](https://github.com/Niko1221/Strata/pull/5002).
 
 Experiment numbers (E…) refer to the author's lab notebook (not public).

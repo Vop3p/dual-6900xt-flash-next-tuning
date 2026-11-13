@@ -49,3 +49,34 @@ gate 12/12; 128K / 200K reads without OOM or stall. Cost: card 0 has ~430–450 
 do not shrink); on one card the 641 MiB of copies left too little for the draft head in one of two cold starts (E706), so on one card leave
 `STRATA_HC_PERSIST_Q8` off or free VRAM first; E704's worst case (200K read + a picture + 32K concurrently, then two 120K reads at once, GPU vision on) ran 9/9
 with 0 stalls and a VRAM peak of 16.3 GB without paging. See `docs/linux-history.md`.
+
+## `0003-0211vx-2x6900xt.patch` - slots, hc int8-only, VRAM scheduler steps 1-3, elastic pictures (11-07 – 11-09)
+
+`git diff 3076edaf d86d3ec6` in the author's tree: five commits on top of `0002` (`3076edaf` = the tree with `0002` applied). The production build
+of 11-09 (`strata-0211vx-006a704b`) was made from an uncommitted version of the same changes; `0004` below is based on these commits. Every
+change is opt-in.
+
+| Switch | What it does | Measured here |
+|---|---|---|
+| `STRATA_SLOT_LAZY=1` | with `--parallel 2 --batch-mtp`, the slot sessions live in a fixed region at the head of each card's expert cache and borrow it only while a slot is in use (the coldest experts move out, ~20 ms; given back after the next single request, ~144 ms) | single-request decode −4.7% per window (3/3), gate 12/12, 160-request concurrent stress 0 stalls (E717) |
+| `STRATA_HC_I8ONLY=1` | with `STRATA_HC_PERSIST_Q8`, keep only the int8 copies of the persistent hc read (the FP16 originals are dropped) | expert slots +293 / +205, −3.2% per window, decode bitwise equal to `HC_PERSIST_Q8` (E719, E743) |
+| `STRATA_VRAM_LEDGER=1`, `STRATA_VRAM_CALIB=1` (`STRATA_VRAM_CALIB_MARGIN_MIB`, default 192, or `tight`/`normal`/`safe`) | a ledger of every VRAM allocation; the calibration measures what each card allocates after its expert cache was sized and keeps exactly that plus a margin free at the next start (replaces `--vram-reserve-mib` / `--vram-reserve-later-mib` and the fixed late terms; one file per binary + arguments + `STRATA_*`) | slots 7003 / 5723 against 6613 / 5439 with fixed reserves (E724, E739); upstream draft [#5691](https://github.com/Niko1221/Strata/pull/5691) |
+| (default) DP staging borrow, VMM per device | the DP read's staging rows borrow the prompt path's lent slots; VMM regions are reserved on the device that maps them (`STRATA_VMM_TLB_FLUSH` for the amdgpu remap issue, TheRock#8744) | the 534 slots lost to DP staging come back; no write corruption after remaps (E722, E723, E730j) |
+| `"vram_elastic": true` (run config) + elastic picture reader | the picture encoder borrows VRAM from the expert cache only while a picture is read, on the card that holds it, and gives it back; `--no-warmup` skips the encoder warm-up | production config with pictures: −5.6% per window, tokens/ms +6.6%, slots +410 / +1160 (the resident encoder took ~1.9 GiB, E739); the first picture after 120 s idle 5.6 s instead of ~2 s |
+| `STRATA_DP_YIELD=2` (`STRATA_DP_YIELD_SMALL=<tokens>`) | a DP prompt read can stop at any chunk boundary to give way (to a picture request) and go on from there; the rest is read with the same chunk plan | stopped/given way/resumed bitwise equal to an uninterrupted read (E733b) |
+
+## `0004-0211fz-2x6900xt.patch` - decode fusions and calibration fixes (production since 11-11 22:3x)
+
+A plain diff against `d86d3ec6` (the tree after `0003`), applied with `git apply`; built as `strata-0211fz-72bb0be6`. Every change is opt-in
+except the DP fix and the VMM placement check.
+
+| Switch | What it does | Measured here |
+|---|---|---|
+| `STRATA_ROUTE_BELL=1`, `STRATA_HCP_Q81=1`, `STRATA_FUSE_WAIT=2`, `STRATA_FETCH_REBASE=1`, `STRATA_GU_SWIGLU=1`, `STRATA_GDN_Q81=1` | six decode fusions: the router writes the doorbell itself, the hc read quantises its own input, one launch for the plan wait and copy, the expert pointers rebased in the copy launch, gate/up with SwiGLU, the GDN projections on q8_1 | graph nodes per window 1056 → 865; −1.3% per window over `0003` in production (three pairs, E772), tokens/ms flat; byte-identical output with fixed routing; parity tests `route_bell_parity`, `fetch_rebase_parity`, `hc_persist_parity` |
+| (default) DP refused block | a DP read whose block is refused no longer reads the head twice (the GDN state was consumed twice) | - |
+| (default) `STRATA_VMM_PLACE_CHECK` | after mapping, checks that every chunk of a card's region is physically on that card and remakes misplaced ones (seen: card-0 chunks intermittently on card 1, E769) | 0 placement warnings in production runs |
+| (default) calibration robustness | measurement-only switches stay out of the key; a new config starts from the binary's last measurement; implausible measurements are not written or used | - |
+| opt-in, off in production | `STRATA_REFILL_ASYNC`, `STRATA_SKIP_WAITB`, `STRATA_SH_Q81` (closed), `STRATA_DUMMY_AT` (measurement) | - |
+
+Production also runs the picture encoder with one hardware queue (`GPU_MAX_HW_QUEUES=1` in a wrapper around `strata-vision`): see
+[docs/linux-history.md](../../docs/linux-history.md) (11-12). Upstream draft [#5897](https://github.com/Niko1221/Strata/pull/5897).

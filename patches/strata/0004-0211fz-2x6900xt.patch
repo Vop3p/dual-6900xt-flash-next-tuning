@@ -1,0 +1,1963 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 7f6ab9d00..47e0a655f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1602,6 +1602,16 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
+   target_include_directories(router_top10_parity PRIVATE ${_strata_gpu_include_directories})
+   target_link_libraries(router_top10_parity PRIVATE strata_kernels ${_strata_gpu_runtime_target})
+   add_test(NAME router_top10_parity COMMAND router_top10_parity --selftest)
++  # [claude] E759 STRATA_ROUTE_BELL: the router with the doorbell folded in, bitwise against the two launches
++  add_executable(route_bell_parity src/kernels/route_bell_parity.cpp)
++  target_include_directories(route_bell_parity PRIVATE ${_strata_gpu_include_directories})
++  target_link_libraries(route_bell_parity PRIVATE strata_kernels ${_strata_gpu_runtime_target})
++  add_test(NAME route_bell_parity COMMAND route_bell_parity)
++  # [claude] E763 B5 STRATA_FETCH_REBASE: the fused copy + rebase against the two launches
++  add_executable(fetch_rebase_parity src/kernels/fetch_rebase_parity.cpp)
++  target_include_directories(fetch_rebase_parity PRIVATE ${_strata_gpu_include_directories})
++  target_link_libraries(fetch_rebase_parity PRIVATE strata_kernels ${_strata_gpu_runtime_target})
++  add_test(NAME fetch_rebase_parity COMMAND fetch_rebase_parity)
+   # #783 PR-c: the multi-token router and the k = 10 float4 combine, bitwise against the single-token contracts
+   add_executable(native_multi_parity src/kernels/native_multi_parity.cpp)
+   target_include_directories(native_multi_parity PRIVATE ${_strata_gpu_include_directories})
+@@ -1785,6 +1795,12 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
+   target_include_directories(conversation_copy_streams_test PRIVATE include)
+   target_link_libraries(conversation_copy_streams_test PRIVATE strata_core ${_strata_gpu_runtime_target})
+   add_test(NAME conversation_copy_streams_test COMMAND conversation_copy_streams_test)
++  add_executable(vram_calib_test tests/program/vram_calib_test.cpp)
++  target_include_directories(vram_calib_test PRIVATE include)
++  add_test(NAME vram_calib_test COMMAND vram_calib_test)
++  add_executable(vram_ledger_test tests/program/vram_ledger_test.cpp)
++  target_include_directories(vram_ledger_test PRIVATE include)
++  add_test(NAME vram_ledger_test COMMAND vram_ledger_test)
+   set_tests_properties(conversation_copy_streams_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+ 
+   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+diff --git a/include/strata/core/verify.hpp b/include/strata/core/verify.hpp
+index 258ba76e3..a140ee2bc 100644
+--- a/include/strata/core/verify.hpp
++++ b/include/strata/core/verify.hpp
+@@ -735,6 +735,7 @@ private:
+     int32_t *ids_ = nullptr, *hit_slot_ = nullptr, *hit_dst_ = nullptr, *hit_count_ = nullptr;
+     int32_t* plan_ = nullptr;                                     // device copy of the plan block
+     uint8_t* staging_ = nullptr;                                  // VRAM slots for the PCIe share of the misses
++    unsigned long long* rb_ptr_ = nullptr;                        // [claude] E763 B5: the staged pointers (STRATA_FETCH_REBASE)
+     static constexpr int64_t kStagingBlobs = 16;
+     static constexpr int64_t kPcieGroupRows = 4;                  // the PCIe call's groups side by side (of <= 16)
+     uint8_t* hit_xq_ = nullptr;
+diff --git a/include/strata/core/vmm.hpp b/include/strata/core/vmm.hpp
+index 4a0ed5b7f..dafbee7aa 100644
+--- a/include/strata/core/vmm.hpp
++++ b/include/strata/core/vmm.hpp
+@@ -5,6 +5,7 @@
+ // are reached through the runtime's entry-point query, so nothing links the driver library.  Not under HIP.
+ 
+ #include <cstdint>
++#include <cstdio>
+ #include <vector>
+ 
+ namespace strata::core {
+@@ -24,6 +25,15 @@ void vmm_chunk_free(VmmChunk h);
+ /// card).  A layer split turns it on when its expert caches are VMM arenas: the prompt path's peer copies (DP, E722
+ /// stages its buffers in the cache's loan) read and write a cache from the other card.
+ void vmm_set_access_all(bool on);
++/// [claude] E771: placement check (HIP).  E769 OFF_5: ~10 GiB of card 0's cache chunks were made physically on card 1 although
++/// the asked device was current at hipMemCreate (vmm_chunk_new) and the handle reports card 0 - intermittent, ~1 start in 330.
++/// The free VRAM of every card is read before and after a map_range: when the range's card fell short of what its new chunks
++/// need (by over 64 MiB and 1/16) and the other cards lost at least half of the shortfall, the new chunks are freed and made
++/// again one at a time, each checked.
++/// Fills `out` (up to 16 cards) with each card's free bytes; false when not available (CUDA, or STRATA_VMM_PLACE_CHECK=0).
++bool vmm_free_all(long long* out, int* n);
++/// true when the drop on `dev` from `before` to `after` shows `bytes` landed elsewhere (see above); prints what it saw
++bool vmm_misplaced(int dev, const long long* before, const long long* after, int n, long long bytes, bool quiet);
+ 
+ class VmmRange {
+ public:
+@@ -61,6 +71,10 @@ private:
+ template <class Take> bool VmmRange::map_range(int64_t lo, int64_t hi, Take take) {
+     lo = lo < 0 ? 0 : lo;
+     hi = hi > chunks() ? chunks() : hi;
++    long long f0[16], f1[16], c0[16], c1[16];   // [claude] E771: every card's free VRAM before / after (placement check)
++    int nf = 0, nc = 0;
++    const bool watch = vmm_free_all(f0, &nf);
++    std::vector<int64_t> made;   // [claude] E771: the chunks this call made new (not take()n), for the check
+     int64_t run = -1;   // access is set once per run of newly mapped chunks (it costs as much as the map)
+     for (int64_t i = lo; i < hi; ++i) {
+         if (mapped(i)) {
+@@ -69,15 +83,43 @@ template <class Take> bool VmmRange::map_range(int64_t lo, int64_t hi, Take take
+             continue;
+         }
+         VmmChunk h = take();
+-        if (h == 0) h = vmm_chunk_new(dev_);   // [claude] E730: the range's card, whichever device is current
++        bool fresh = false;
++        if (h == 0) { h = vmm_chunk_new(dev_); fresh = h != 0; }   // [claude] E730: the range's card, whichever device is current
+         if (h == 0 || !map_one(i, h)) {
+             if (h != 0) vmm_chunk_free(h);
+             if (run >= 0) commit_run(run, i);
+             return false;
+         }
++        if (fresh && watch) made.push_back(i);
+         if (run < 0) run = i;
+     }
+-    return run < 0 || commit_run(run, hi);
++    if (run >= 0 && !commit_run(run, hi)) return false;
++    if (!watch || made.empty() || !vmm_free_all(f1, &nf)) return true;
++    const long long bytes = (long long) made.size() * (long long) vmm_granularity();
++    if (!vmm_misplaced(dev_, f0, f1, nf, bytes, false)) return true;
++    // [claude] E771: some of the new chunks are on another card - free all of them and make them again one at a time
++    for (const int64_t i : made) vmm_chunk_free(unmap(i));
++    int64_t bad = 0;
++    for (const int64_t i : made) {
++        VmmChunk h = 0;
++        for (int tries = 0; tries < 4 && h == 0; ++tries) {
++            if (!vmm_free_all(c0, &nc)) return false;
++            h = vmm_chunk_new(dev_);
++            if (h == 0) return false;
++            if (!map_one(i, h)) { vmm_chunk_free(h); return false; }
++            if (!commit_run(i, i + 1)) return false;   // measured after the access is set (the backing may come with it)
++            if (!vmm_free_all(c1, &nc)) return false;
++            if (vmm_misplaced(dev_, c0, c1, nc, (long long) vmm_granularity(), true)) { ++bad; vmm_chunk_free(unmap(i)); h = 0; }
++        }
++        if (h == 0) return false;
++    }
++    // every chunk passed its own check; the whole-range figure is printed for the record only (other allocations or frees
++    // since the first reading can move it, so it does not decide)
++    const bool whole = vmm_free_all(f1, &nf) && vmm_misplaced(dev_, f0, f1, nf, bytes, true);
++    std::fprintf(stderr, "strata: VMM placement: %lld chunk(s) made again on CUDA%d, each checked; %lld landed elsewhere once more "
++                 "and were made a third or fourth time%s\n", (long long) made.size(), dev_, (long long) bad,
++                 whole ? " (the whole-range reading still looks short - other allocations or frees may have moved it)" : "");
++    return true;
+ }
+ 
+ }  // namespace strata::core
+diff --git a/include/strata/kernels/native_router.hpp b/include/strata/kernels/native_router.hpp
+index a940e1b35..1e31b5609 100644
+--- a/include/strata/kernels/native_router.hpp
++++ b/include/strata/kernels/native_router.hpp
+@@ -16,6 +16,10 @@ bool native_router_enabled();
+ void native_router_top10(const float* logits, int32_t* ids, float* weights, void* stream);
+ /// n_tok rows at once (logits [n,512], ids/weights [n,10]); each row exactly as the single call.
+ void native_router_top10_multi(const float* logits, int32_t* ids, float* weights, int n_tok, void* stream);
++/// [claude] E759 STRATA_ROUTE_BELL: native_router_top10_multi then doorbell_publish (x, ids, weights, ring) in one launch;
++/// 1..8 tokens; the same bytes as the two launches.
++void native_router_top10_multi_bell(const float* logits, int32_t* ids, float* weights, int n_tok, const float* x, int64_t n_x,
++                                    float* x_out, int32_t* ids_out, float* w_out, uint32_t* seq, void* stream);
+ /// The same contract for a model family's (experts, top-k): 512 / 10 (Flash-Next: the two calls above, unchanged) and
+ /// 256 / 8 (Qwen3.6-35B-A3B).  logits [n_tok, n_expert], ids / weights [n_tok, k].  CUDA / HIP.
+ bool native_router_topk_supported(int n_expert, int k);
+diff --git a/include/strata/kernels/verify_kernels.hpp b/include/strata/kernels/verify_kernels.hpp
+index ee779c691..0d287630e 100644
+--- a/include/strata/kernels/verify_kernels.hpp
++++ b/include/strata/kernels/verify_kernels.hpp
+@@ -151,6 +151,10 @@ void fetch_blobs(const unsigned long long* src, const int32_t* n, uint8_t* dst,
+ void res_patch(int32_t* table, const int32_t* pairs, int n, void* stream);
+ /// ptr[k] = base + k * blob_bytes for k < *n (the staged copies `fetch_blobs` made).
+ void rebase_ptrs(unsigned long long* ptr, const int32_t* n, uint8_t* base, int64_t blob_bytes, void* stream);
++/// [claude] E763 B5 (STRATA_FETCH_REBASE=1): fetch_blobs then rebase_ptrs in one launch.  The staged pointers go to `out`
++/// (not back into `src`: the other blocks still read it), cap entries; `out` is what the PCIe share's kernels read then.
++void fetch_blobs_rebase(const unsigned long long* src, const int32_t* n, uint8_t* dst, int64_t blob_bytes, int cap,
++                        unsigned long long* out, void* stream);
+ 
+ // ---- the MTP draft layer (src/core/mtp.cpp)
+ /// R[t][c][:] = h[t][c][:] + e[t][:]  (the embedding branch added to every stream).
+diff --git a/include/strata/program/vram_calib.hpp b/include/strata/program/vram_calib.hpp
+new file mode 100644
+index 000000000..0998edf90
+--- /dev/null
++++ b/include/strata/program/vram_calib.hpp
+@@ -0,0 +1,118 @@
++// include/strata/program/vram_calib.hpp - STRATA_VRAM_CALIB (#5571): the host-side arithmetic of the measured VRAM reserve.
++//
++// generate.cpp measures, per card, what is allocated after the expert cache was sized (`need`: the free VRAM when the cache
++// was sized - the free VRAM with everything loaded - the cache) and what is lost later (`grow`: the further drop to the lowest
++// free figure after a request, the window graphs captured on first use). The next start of the same binary with the same
++// arguments and STRATA_* variables keeps need + grow + a margin free instead of --vram-reserve-mib / --vram-reserve-later-mib
++// and the fixed late-allocation terms. This header holds the parts that touch no GPU, so tests/program/vram_calib_test.cpp
++// can pin them: the file key, the file format, the reserve and the growth update.
++#pragma once
++
++#include <algorithm>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <sstream>
++#include <string>
++#include <vector>
++
++namespace strata::program::vram_calib {
++
++constexpr long long kDefaultMarginMib = 192;   ///< STRATA_VRAM_CALIB_MARGIN_MIB; 192 kept two 16 GB cards stall-free (#5571)
++
++/// STRATA_VRAM_CALIB_MARGIN_MIB: a number of MiB, or a tier - "tight" (96: the most cache, for a config shown not to stall),
++/// "normal" (192, the default) or "safe" (384: a card shared with a desktop or other programs, or WDDM, where a full card
++/// pages instead of failing, #2192). Unset, empty or not understood: the default.
++inline long long margin_mib(const char* v) {
++    if (v == nullptr || *v == '\0') return kDefaultMarginMib;
++    if (std::strcmp(v, "tight") == 0) return 96;
++    if (std::strcmp(v, "normal") == 0) return kDefaultMarginMib;
++    if (std::strcmp(v, "safe") == 0) return 384;
++    char* end = nullptr;
++    const long long n = std::strtoll(v, &end, 10);
++    return end != v && *end == '\0' && n >= 0 ? n : kDefaultMarginMib;
++}
++
++struct Card {
++    int dev = -1;
++    long long need = -1;   ///< bytes allocated on the card after its cache was sized (-1: not measured)
++    long long grow = 0;    ///< bytes lost after the first requests (window graphs captured on first use)
++};
++
++/// The STRATA_* variables that select the engine's behaviour, sorted. The calibration's own switches are left out: turning the
++/// margin up must not throw the measurement away.
++inline std::vector<std::string> sizing_env(char** envp) {
++    std::vector<std::string> env;
++    for (char** e = envp; e != nullptr && *e != nullptr; ++e)
++        if (std::strncmp(*e, "STRATA_", 7) == 0 && std::strncmp(*e, "STRATA_VRAM_CALIB", 17) != 0) env.emplace_back(*e);
++    std::sort(env.begin(), env.end());
++    return env;
++}
++
++/// 16 hex digits naming the calibration file: FNV-1a over the binary's identity, every argument and the sizing variables.
++inline std::string file_key(const std::string& exe_id, const std::vector<std::string>& args, const std::vector<std::string>& env) {
++    std::string key = exe_id + ";";
++    for (const auto& a : args) { key += a; key += '\x1f'; }
++    for (const auto& e : env) { key += e; key += '\x1e'; }
++    uint64_t h = 1469598103934665603ull;
++    for (const unsigned char c : key) { h ^= c; h *= 1099511628211ull; }
++    char hex[24];
++    std::snprintf(hex, sizeof hex, "%016llx", (unsigned long long) h);
++    return hex;
++}
++
++/// One line per card: "<dev> <need bytes> <grow bytes>".
++inline std::string format(const std::vector<Card>& cards) {
++    std::string out;
++    char line[96];
++    for (const Card& c : cards) {
++        std::snprintf(line, sizeof line, "%d %lld %lld\n", c.dev, c.need, c.grow);
++        out += line;
++    }
++    return out;
++}
++inline std::vector<Card> parse(const std::string& text) {
++    std::vector<Card> cards;
++    std::istringstream in(text);
++    Card c;
++    while (in >> c.dev >> c.need >> c.grow) cards.push_back(c);
++    return cards;
++}
++
++/// MiB to keep free on `dev` after its cache: need + grow rounded up to a MiB, plus the margin; -1 without a measurement.
++inline long long reserve_mib(const std::vector<Card>& cards, int dev, long long margin_mib) {
++    for (const Card& c : cards)
++        if (c.dev == dev && c.need >= 0)
++            return (c.need + std::max(0ll, c.grow) + (1ll << 20) - 1) / (1ll << 20) + std::max(0ll, margin_mib);
++    return -1;
++}
++
++/// `need` from the free figure when the cache was sized, the free figure with everything loaded and the cache's size.
++inline long long need_bytes(long long free_at_mark, long long free_now, long long cache_bytes) {
++    if (free_at_mark < 0 || free_now < 0) return -1;
++    return std::max(0ll, free_at_mark - free_now - cache_bytes);
++}
++
++/// [claude] E771: what to do with a measured need (`raw` may be negative) given the calibration this start was sized from
++/// (`prev_need`, -1 without one): Take it; KeepPrev - it fell by more than half and by more than 64 MiB (E769: a card that
++/// received another card's chunks measured 0 MiB, and writing that left no room on the next starts); Skip - no earlier figure
++/// and under 32 MiB, too little to be real, so the card is not written.  A rise is always taken (the safe direction).
++enum class NeedVerdict { Take, KeepPrev, Skip };
++inline NeedVerdict judge_need(long long raw, long long prev_need) {
++    constexpr long long kMiB = 1ll << 20;
++    if (prev_need >= 0) return 2 * raw < prev_need && prev_need - raw > 64 * kMiB ? NeedVerdict::KeepPrev : NeedVerdict::Take;
++    return raw < 32 * kMiB ? NeedVerdict::Skip : NeedVerdict::Take;
++}
++
++/// After a request: the growth since everything was loaded, never smaller than what is already kept. True when it grew.
++inline bool update_grow(long long& grow, long long seal_free, long long& low_free, long long free_now) {
++    if (free_now < 0 || free_now >= low_free) return false;
++    low_free = free_now;
++    const long long g = seal_free - low_free;
++    if (g <= grow) return false;
++    grow = g;
++    return true;
++}
++
++}  // namespace strata::program::vram_calib
+diff --git a/src/core/verify.cpp b/src/core/verify.cpp
+index 8d3277be4..dfe4b250a 100644
+--- a/src/core/verify.cpp
++++ b/src/core/verify.cpp
+@@ -432,9 +432,11 @@ bool device_is_sm75() {
+ 
+ bool fuse_wait_on() {
+ #if defined(STRATA_USE_HIP)
++    // [claude] E763 B1: as the CUDA build, 2 = the plan's wait only (one block; E758: the rows' version, every row block polling
++    // mapped memory, was 0.7 % slower here), 1 = both, 0 = neither
+     static const int env = [] {
+         const char* v = std::getenv("STRATA_FUSE_WAIT");
+-        return v != nullptr ? (std::atoi(v) != 0 ? 1 : 0) : -1;
++        return v != nullptr ? std::atoi(v) : -1;
+     }();
+     if (env >= 0) return env != 0;
+     static int per_dev[64];   // 0 unknown, 1 no, 2 yes
+@@ -454,10 +456,11 @@ bool fuse_wait_on() {
+     return device_is_sm75();
+ #endif
+ }
+-// 143-amdk's rows version of the folded wait (copy_rows_from_mapped_after): HIP with fuse_wait_on, CUDA STRATA_FUSE_WAIT=1
++// 143-amdk's rows version of the folded wait (copy_rows_from_mapped_after): HIP with fuse_wait_on (not =2, E763), CUDA STRATA_FUSE_WAIT=1
+ bool fuse_rows_on() {
+ #if defined(STRATA_USE_HIP)
+-    return fuse_wait_on();
++    static const bool plan_only = [] { const char* v = std::getenv("STRATA_FUSE_WAIT"); return v != nullptr && std::atoi(v) == 2; }();
++    return fuse_wait_on() && !plan_only;
+ #else
+     static const bool on = [] { const char* v = std::getenv("STRATA_FUSE_WAIT"); return v != nullptr && std::atoi(v) == 1; }();
+     return on;
+@@ -1140,6 +1143,7 @@ bool Verifier::init(const WeightTable& wt, const ModelGeometry& g, SessionState&
+         hit_slot_ = b.take<int32_t>(T * K); hit_dst_ = b.take<int32_t>(T * K); hit_count_ = b.take<int32_t>(4);
+         plan_ = b.take<int32_t>(2 * ((uint64_t) plan_i32_ + 16));
+         staging_ = b.take<uint8_t>((uint64_t) kStagingBlobs * strata::kernels::cpu::expert_layout().max_blob);
++        rb_ptr_ = b.take<unsigned long long>((uint64_t) kStagingBlobs);   // [claude] E763 B5
+         hit_xq_ = b.take<uint8_t>(T * (N / 32) * 34); hit_xs_ = b.take<float>(T * (N / 32));
+         nat_xq_ = b.take<uint8_t>(T * (N / 32) * 36);
+         nat_xr_ = had_gu_any ? b.take<float>(T * N) : nullptr;
+@@ -1417,7 +1421,12 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+     };
+     // a batch window's rows each read their own slot's indexer: in line there
+     const bool sidem = side_mixer && !batch_rec_;
++    // [claude] E756 measurement only: STRATA_DUMMY_AT=<stamp index> adds STRATA_DUMMY_AT_N (default 8) empty kernel nodes at
++    // that stamp of every layer (group 0, the main stream) - whether that point is on the window's critical path
++    static const int dummy_at = [] { const char* e = std::getenv("STRATA_DUMMY_AT"); return e != nullptr ? std::atoi(e) : -1; }();
++    static const int dummy_at_n = [] { const char* e = std::getenv("STRATA_DUMMY_AT_N"); return e != nullptr ? std::atoi(e) : 8; }();
+     auto stamp = [&](int64_t l, int i, int grp) {
++        if (i == dummy_at && grp == 0) for (int d = 0; d < dummy_at_n; ++d) gpu_noop(cs);
+         if (prof_on_ && grp == 0) gpu_stamp(prof_, (int) (l * kProfPer + i), cs);
+         if (trace_m_ != nullptr) gpu_stamp(trace_m_, (int) ((l * kProfPer + i) * 2 + grp), cs);   // #649
+     };
+@@ -1634,6 +1643,7 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+             }
+             pending = false;
+         }
++        static const bool hcp_q81_env = [] { const char* v = std::getenv("STRATA_HCP_Q81"); return v != nullptr && v[0] == '1'; }();
+         auto gr_read_group = [&](int half, bool apply, float* inj_prev, float* inj_out) {
+             strata::dispatch::notef("hc read: weights Q8_0 copies=%ld (0 = bf16 rows), half=%ld, qfuse=%ld", (long) (wd[half]->hc_q8 != nullptr), (long) half, (long) (qcnt_ != nullptr));
+             FusedGrArgs fa[kFusedGrWideT];
+@@ -1653,9 +1663,15 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+                     a.q8_cnt = qcnt_;
+                     if (half == 0) a.q8_mixed = xq_ + (size_t) (t - tb) * (N / 32) * 36;
+                     else if (strata::kernels::cpu::expert_layout().native) a.q8_mixed = nat_xq_ + (size_t) t * (N / 32) * 36;
++                } else if (hcp_q81_env) {   // [claude] E760 STRATA_HCP_Q81: the persistent read writes them (same places)
++                    if (half == 0) a.q8_mixed = xq_ + (size_t) (t - tb) * (N / 32) * 36;
++                    else if (strata::kernels::cpu::expert_layout().native) a.q8_mixed = nat_xq_ + (size_t) t * (N / 32) * 36;
+                 }
+             }
+-            if (strata::kernels::fused_gr_read_persist(fa, n, cs)) return false;   // STRATA_HC_PERSIST=1; q8_mixed is never set there
++            // STRATA_HC_PERSIST=1: q8_mixed set there only under E760 STRATA_HCP_Q81 (the read then wrote the images)
++            if (strata::kernels::fused_gr_read_persist(fa, n, cs)) return qcnt_ == nullptr && hcp_q81_env && fa[0].q8_mixed != nullptr;
++            if (qcnt_ == nullptr && hcp_q81_env)   // E760: the default read would need the QFUSE counters it does not have
++                for (int t = tb; t < te; ++t) fa[t - tb].q8_mixed = nullptr;
+             if (fa[0].q8_key != nullptr) {   // [claude] STRATA_HC_I8ONLY: the default read would read BF16 that is not there
+                 std::fprintf(stderr, "strata verify: STRATA_HC_I8ONLY: a %d-token hyper-connection read the persistent kernel does "
+                                      "not take (STRATA_QFUSE or more tokens than its check covered); no BF16 copy to read\n", n);
+@@ -1808,6 +1824,7 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+                     const char* v = std::getenv("STRATA_BATCH_GDN_GROUPS");
+                     return v != nullptr && std::atoi(v) != 0;
+                 }();
++                bool gdn_wrote_q8 = false;   // [claude] E765: the output norm wrote the out-projection's q8_1
+                 if (batch_rec_ && gdn_groups_on && te - tb <= 8) {
+                     strata::kernels::GdnGroups gg;
+                     for (int t = tb; t < te;) {
+@@ -1834,13 +1851,19 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+                                             (const float*) wnm->data, EPS, y_ + (size_t) first * ZV,
+                                             (int) HK, (int) HV, t - first, keep_rows ? one_ : nullptr, cs, 0);
+                     }
+-                } else
++                } else {
++                // [claude] E765 STRATA_GDN_Q81=1 (opt-in): only STRATA_QFUSE's GDN half - the output norm writes the
++                // out-projection's q8_1 image (gdn_q8_1_store, native_quantize_q8_1_kernel's bytes) - without the rest of it
++                static const bool gdn_q81 = [] { const char* v = std::getenv("STRATA_GDN_Q81"); return v != nullptr && v[0] == '1'; }();
++                void* yq = g_qfuse() || (gdn_q81 && !self_commit) ? (void*) xq_ : nullptr;   // (QFUSE turns self-commit off; E765 keeps it and quantizes then)
+                 gdn_step_norm_multi(state, hb, (int) C, gate, beta, z_, (const float*) wnm->data, EPS, y_, (int) HK,
+-                                    (int) HV, te, self_commit ? one_ : nullptr, cs, tb, g_qfuse() ? (void*) xq_ : nullptr);
++                                    (int) HV, te, self_commit ? one_ : nullptr, cs, tb, yq);
++                gdn_wrote_q8 = yq != nullptr;
++                }
+                 stamp(l, 6, grp);
+-                // STRATA_QFUSE: done above by gdn_step_norm_multi - but a batch's per-slot recurrence passes it no q8_1
+-                // destination (#1139: the out-projection read stale bytes), so that case quantizes here as without it
+-                if (!g_qfuse() || batch_rec_) quant_in(y_ + (size_t) tb * ZV, (int) ZV);
++                // STRATA_QFUSE / E765: done above by gdn_step_norm_multi - but a batch's per-slot recurrence (and the groups'
++                // path) pass it no q8_1 destination (#1139: the out-projection read stale bytes), so those quantize here
++                if (!gdn_wrote_q8) quant_in(y_ + (size_t) tb * ZV, (int) ZV);
+                 else il_ready = false;
+                 mm(wout, bo_ + tb * N, (int) ZV, (int) N);
+             } else {
+@@ -2231,6 +2254,7 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+         stamp(l, 16, grp);
+         const bool q8_ffn = gr_read_group(1, true, inj_, inj2_);   // true: nat_xq_ holds the MoE input's q8_1 (STRATA_QFUSE)
+         stamp(l, 32, grp);   // the profile only: the FFN-side read ends here, the router starts
++        bool route_belled = false;   // [claude] E759: the router's launch also published the doorbell
+         // with CPU experts in the window the shared expert forks off once the doorbell is published (it no longer
+         // competes with it for the GPU's first microseconds); STRATA_SH_FORK_LATE=0 forks at the top as before
+         static const bool sh_fork_late_env = [] {
+@@ -2261,6 +2285,21 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+                 if (!sg_ready)
+                 bf16_gemv_fp32_mmvf_multi(mixed_ + tb * N, N, (const uint16_t*) w_router->data, logits_ + tb * NE, NE, N,
+                                           NE, n, cs);
++                // [claude] E759 STRATA_ROUTE_BELL=1 (opt-in): the doorbell below folded into the router's launch, only where
++                // nothing runs between them (no route prior / route-resident / route stats / device plan / stored ring) and
++                // the publish is the plain one with weights (always_publish_ or remote_opt_)
++                static const bool route_bell_env = [] { const char* v = std::getenv("STRATA_ROUTE_BELL"); return v != nullptr && v[0] == '1'; }();
++                route_belled = route_bell_env && n >= 1 && n <= 8 && NE == 512 && K == 10 && g_route_prior() <= 0.0f &&
++                               route_resident_cfg().margin <= 0.0f && !(rs_on_ && G == 1 && n <= 8 && T <= 8) && !ar_on() &&
++                               !device_plan_ && (remote_opt_ || always_publish_)
++#if defined(STRATA_USE_HIP)
++                               && !g_doorbell_store
++#endif
++                               ;
++                if (route_belled)
++                    native_router_top10_multi_bell(logits_ + tb * NE, ids_ + tb * K, w_ + tb * K, n, xm, (int64_t) n * N,
++                                                   m_x_ + tb * N, m_ids_ + tb * K, m_w_ + tb * K, m_seq_, cs);
++                else
+                 native_router_top10_multi(logits_ + tb * NE, ids_ + tb * K, w_ + tb * K, n, cs);
+             } catch (const std::exception& e) { err = "verify router: " + std::string(e.what()); return false; }
+ #if defined(STRATA_HIP_GFX906)
+@@ -2314,7 +2353,9 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+ #endif
+             // #578: the helper GPUs reduce with the routing weights - publish them; set_always_publish: the rows
+             // whatever the device's residency table says (pipelined windows)
+-            if (remote_opt_ || always_publish_)
++            if (route_belled) {
++                // [claude] E759: published by the router's launch
++            } else if (remote_opt_ || always_publish_)
+                 doorbell_publish(xm, ids_ + tb * K, w_ + tb * K, (int64_t) n * N, (int64_t) n * K, m_x_ + tb * N,
+                                  m_ids_ + tb * K, m_w_ + tb * K, m_seq_, cs);
+             else {
+@@ -2347,6 +2388,15 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+             // native_quantize_q8_1 write the same bytes)
+             qdedup = g_qdedup() && !sh_fork && strata::kernels::cpu::expert_layout().native;
+             if (qdedup && !q8_ffn) quantize_q8_1_rows(xm, n, N, nat_xq_ + (size_t) tb * (N / 32) * 36, cs);
++            // [claude] E769 STRATA_SH_Q81=1 (opt-in): the persistent hc read already wrote xm's q8_1 image into nat_xq_
++            // (E760 STRATA_HCP_Q81, q8_ffn) - the shared expert reads it instead of quantizing again on its stream.  Safe
++            // where: the stream forks late (after the doorbell: the hc read has finished writing nat_xq_ before the fork
++            // event), and the layer is not Hadamard-folded (a folded layer rewrites nat_xq_ on cs right below, which a
++            // forked shared expert could still be reading).  nat_xq_ is next written by the next layer's hc read, after cs
++            // has joined ev_join_.
++            static const bool sh_q81 = [] { const char* v = std::getenv("STRATA_SH_Q81"); return v != nullptr && v[0] == '1'; }();
++            const bool sh_from_hcp = sh_q81 && q8_ffn && !qdedup && strata::kernels::cpu::expert_layout().native &&
++                                     !strata::kernels::cpu::expert_layout().fmt[(size_t) l].had_gu && (!sh_fork || sh_fork_late);
+             if (!shared_expert_native_bf16_enabled()) {
+                 if (dec_batch) f32_to_bf16_bulk(mixed_ + tb * N, sh_bf16_ + tb * N, (int64_t) n * N, sh_stream);   // contiguous rows
+                 else for (int t = tb; t < te; ++t) f32_to_bf16_bulk(mixed_ + t * N, sh_bf16_ + t * N, N, sh_stream);
+@@ -2354,7 +2404,7 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+             try {
+                 shared_expert_multi(n, xm, sh_bf16_ + tb * N, nsw, (const uint16_t*) wgi->data, sh_gate_ + (size_t) tb * g.n_ff,
+                                     sh_up_ + (size_t) tb * g.n_ff, sh_g_ + tb, shared_ + tb * N, N, g.n_ff, sh_stream,
+-                                    qdedup ? (const void*) (nat_xq_ + (size_t) tb * (N / 32) * 36) : nullptr,
++                                    qdedup || sh_from_hcp ? (const void*) (nat_xq_ + (size_t) tb * (N / 32) * 36) : nullptr,
+                                     (sg_ready ? 1 : 0) | (lfuse_on(n) && g_lfuse_pair() ? 2 : 0));
+                 sg_gated_[grp] = sg_ready;
+             } catch (const std::exception& e) {
+@@ -2457,20 +2507,37 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
+             stamp(l, 19, grp);
+             grouped(p_ptr, p_start, p_counts, 0, hit_out, true);
+             stamp(l, 20, grp);
++            // [claude] E769 STRATA_SKIP_WAITB=1 (opt-in): with pcie_mode != 0 (auto = 2: the share is read from mapped host
++            // memory by a kernel) the pool calls fetch with no blobs (expert_source.cpp: P.fetch(..., pcie_mode != 0 ? 0 : n)),
++            // so fetch_dma raises flag B at once, right after publish_plan raised flag A, on the same thread - and the share's
++            // pointers are in the plan, written before flag A (a seq_cst fence).  Past wait A nothing is left for flag B to
++            // guard.  pcie_mode 0 (the copy engine fills staging) keeps the wait.
++            static const bool skip_waitb = [] { const char* v = std::getenv("STRATA_SKIP_WAITB"); return v != nullptr && v[0] == '1'; }();
+             if (device_plan_) wait_flag_ge_or(m_flagB_, ring, skip_ + grp, cs);
+             else if (m_bal_ != nullptr)   // set_pcie_balance: the PCIe part starts
+                 wait_flag_ge_stamped(m_flagB_, ring, m_bal_ + ((l - lb_) * 2 + grp) * 4 + 1, nullptr, cs);
+-            else wait_flag_ge(m_flagB_, ring, cs);                 // the PCIe share is in staging (DMA) or mapped
++            else if (skip_waitb && sink_.pcie_mode != 0) {
++                // E769: no wait (see above)
++            } else wait_flag_ge(m_flagB_, ring, cs);                 // the PCIe share is in staging (DMA) or mapped
++            const unsigned long long* p_share = p_ptr2;   // [claude] E763 B5: where the share's kernels read its pointers
+             if (sink_.pcie_mode == 2) {                            // stage it with a copy kernel, then point at staging
+                 const int64_t per = G == 2 ? kStagingBlobs / 2 : kStagingBlobs;
+                 uint8_t* stage = staging_ + (size_t) (grp * per) * lay.max_blob;
++                // [claude] E763 B5 STRATA_FETCH_REBASE=1 (opt-in): the copy and the pointers in one launch, the pointers in
++                // rb_ptr_ (the copy's blocks still read p_ptr2's)
++                static const bool fetch_rebase = [] { const char* v = std::getenv("STRATA_FETCH_REBASE"); return v != nullptr && v[0] == '1'; }();
++                if (fetch_rebase && rb_ptr_ != nullptr) {
++                    fetch_blobs_rebase(p_ptr2, p_counts + 2, stage, (int64_t) lay.blob_bytes(l), (int) per, rb_ptr_ + grp * per, cs);
++                    p_share = rb_ptr_ + grp * per;
++                } else {
+                 fetch_blobs(p_ptr2, p_counts + 2, stage, (int64_t) lay.blob_bytes(l), (int) per, cs);
+                 rebase_ptrs((unsigned long long*) p_ptr2, p_counts + 2, stage, (int64_t) lay.blob_bytes(l), cs);
++                }
+             }
+             stamp(l, 21, grp);
+             // the PCIe share is pcie_frac of the misses: a few groups when the cache is cold, usually none (always none at
+             // pcie_frac 0), so its launch is kPcieGroupRows block rows striding over the groups, not cap of them
+-            grouped(p_ptr2, p_start2, p_counts + 2, kPcieGroupRows, hit_out, false);
++            grouped(p_share, p_start2, p_counts + 2, kPcieGroupRows, hit_out, false);
+             stamp(l, 22, grp);
+             if (device_plan_) {   // no CPU share when the device planned the group: its rows are zeros
+                 wait_flag_ge_or(m_flag_, ring, skip_ + grp, cs);
+diff --git a/src/core/vmm.cpp b/src/core/vmm.cpp
+index 50a98b2df..55c07ace9 100644
+--- a/src/core/vmm.cpp
++++ b/src/core/vmm.cpp
+@@ -1,5 +1,8 @@
+ #include "strata/core/vmm.hpp"
+ 
++#include <algorithm>
++#include <cstdio>
++#include <cstdlib>
+ #include <vector>
+ 
+ // [claude] E730: vmm_set_access_all (shared by every backend below)
+@@ -8,6 +11,26 @@ namespace {
+ bool g_access_all = false;
+ }  // namespace
+ void vmm_set_access_all(bool on) { g_access_all = on; }
++// [claude] E771: the placement verdict (any backend that reads the cards' free VRAM).  Misplaced = the range's card fell short
++// of `bytes` by a real amount AND the other cards together lost at least half of that shortfall: a drop elsewhere is required
++// so that another process freeing VRAM on this card at the same time (the elastic picture reader) is not taken for one.
++bool vmm_misplaced(int dev, const long long* before, const long long* after, int n, long long bytes, bool quiet) {
++    if (dev < 0 || dev >= n || bytes <= 0) return false;
++    const long long own = before[dev] - after[dev];
++    long long other = 0;
++    for (int k = 0; k < n; ++k)
++        if (k != dev) other += before[k] - after[k];
++    // the shortfall on this card must be real (a whole range: over 64 MiB and 1/16 of it; one chunk: half of it), and at least
++    // half of it must show up on the other cards
++    const long long deficit = bytes - own;
++    const long long need_deficit = bytes >= (128ll << 20) ? std::max(64ll << 20, bytes / 16) : bytes / 2;
++    const bool bad = deficit >= need_deficit && 2 * other >= deficit;
++    if (bad && !quiet)
++        std::fprintf(stderr, "strata: VMM placement: CUDA%d mapped %lld MiB of new chunks but its free VRAM fell by %lld MiB while "
++                             "the other card(s) fell by %lld MiB - the chunks went to another card (E771); making them again\n",
++                     dev, bytes >> 20, own >> 20, other >> 20);
++    return bad;
++}
+ }  // namespace strata::core
+ 
+ #if !defined(STRATA_USE_HIP) && !defined(STRATA_HIP_GFX906) && !defined(STRATA_GPU_METAL)
+@@ -80,6 +103,7 @@ const Api& api() {
+ 
+ bool vmm_available() { return api().ok; }
+ uint64_t vmm_granularity() { return api().ok ? api().gran : 0; }
++bool vmm_free_all(long long*, int* n) { *n = 0; return false; }   // [claude] E771: CUDA honours location.id - no check
+ 
+ VmmChunk vmm_chunk_new(int dev) {
+     const Api& a = api();
+@@ -178,6 +202,7 @@ VmmChunk VmmRange::unmap(int64_t i) {
+ #include <hip/hip_version.h>
+ 
+ #include <cstdio>
++#include <atomic>
+ #include <cstdlib>
+ #include <mutex>
+ #endif
+@@ -232,6 +257,26 @@ const Api& api() {
+ 
+ bool vmm_available() { return api().ok; }
+ uint64_t vmm_granularity() { return api().ok ? api().gran : 0; }
++// [claude] E771: every card's free VRAM (hipMemGetInfo on each, the current device restored), for the placement check in
++// VmmRange::map_range.  STRATA_VMM_PLACE_CHECK=0 turns the check off.
++bool vmm_free_all(long long* out, int* n) {
++    static const bool on = [] { const char* v = std::getenv("STRATA_VMM_PLACE_CHECK"); return !(v != nullptr && v[0] == '0'); }();
++    *n = 0;
++    if (!on || !api().ok) return false;
++    int nd = 0, cur = 0;
++    if (hipGetDeviceCount(&nd) != hipSuccess || nd < 2 || hipGetDevice(&cur) != hipSuccess) { (void) hipGetLastError(); return false; }
++    nd = nd > 16 ? 16 : nd;
++    bool ok = true;
++    for (int k = 0; k < nd && ok; ++k) {
++        size_t fr = 0, tot = 0;
++        ok = hipSetDevice(k) == hipSuccess && hipMemGetInfo(&fr, &tot) == hipSuccess;
++        out[k] = (long long) fr;
++    }
++    (void) hipSetDevice(cur);
++    if (!ok) { (void) hipGetLastError(); return false; }
++    *n = nd;
++    return true;
++}
+ 
+ VmmChunk vmm_chunk_new(int dev) {
+     const Api& a = api();
+@@ -242,10 +287,17 @@ VmmChunk vmm_chunk_new(int dev) {
+     // handle still reports the asked device), so the asked device is made current for the call
+     int cur = dev;
+     if (hipGetDevice(&cur) != hipSuccess) { (void) hipGetLastError(); cur = dev; }
+-    if (cur != dev && hipSetDevice(dev) != hipSuccess) { fail("hipSetDevice", hipGetLastError()); return 0; }
++    int place = dev;   // [claude] E771: STRATA_VMM_MISPLACE_TEST=N (test only): card 0's first N chunks are made on card 1
++    {
++        static const long long n_bad = [] { const char* v = std::getenv("STRATA_VMM_MISPLACE_TEST"); return v != nullptr ? std::atoll(v) : 0ll; }();
++        static std::atomic<long long> made{0};
++        int nd = 0;
++        if (n_bad > 0 && dev == 0 && hipGetDeviceCount(&nd) == hipSuccess && nd > 1 && made.fetch_add(1) < n_bad) place = 1;
++    }
++    if (cur != place && hipSetDevice(place) != hipSuccess) { fail("hipSetDevice", hipGetLastError()); return 0; }
+     hipMemGenericAllocationHandle_t h = nullptr;
+     const hipError_t ce = hipMemCreate(&h, (size_t) a.gran, &prop, 0);
+-    if (cur != dev) (void) hipSetDevice(cur);
++    if (cur != place) (void) hipSetDevice(cur);
+     if (ce != hipSuccess) { fail("hipMemCreate", ce); return 0; }
+ #ifdef STRATA_VRAM_LEDGER
+     ::strata::vram::note_alloc((void*) h, dev, (size_t) a.gran, __FILE__, __LINE__);   // [claude] E723: VMM chunks in the ledger
+@@ -343,6 +395,7 @@ VmmChunk VmmRange::unmap(int64_t i) {
+ namespace strata::core {
+ bool vmm_available() { return false; }
+ uint64_t vmm_granularity() { return 0; }
++bool vmm_free_all(long long*, int* n) { *n = 0; return false; }   // [claude] E771
+ VmmChunk vmm_chunk_new(int) { return 0; }
+ void vmm_chunk_free(VmmChunk) {}
+ bool VmmRange::reserve(uint64_t) { return false; }
+diff --git a/src/kernels/cuda/fused_gr.cu b/src/kernels/cuda/fused_gr.cu
+index f353817a6..f7fed52cb 100644
+--- a/src/kernels/cuda/fused_gr.cu
++++ b/src/kernels/cuda/fused_gr.cu
+@@ -3465,6 +3465,23 @@ __device__ __forceinline__ double dot8d(const uint4 w, const float* x) {
+     }
+     return acc;
+ }
++// [claude] E760 STRATA_HCP_Q81: the q8_1 image of a 32-column group, written by the warp that holds it (UPC == 32: block b's
++// columns 32b..32b+31 of token k are warp k's lanes) with native_quantize_q8_1_kernel's quantizer - the same XOR-tree max
++// and sum, d = amax / 127, roundf(x / d), ds = (d, sum) - on the value the read stores to `mixed` (the separate quantizer
++// reads that float back)
++__device__ __forceinline__ void hcp_q81_store(uint8_t* q8, int c, float xi) {
++#pragma clang fp contract(off)
++    float amax = fabsf(xi), sum = xi;
++#pragma unroll
++    for (int o = 16; o > 0; o >>= 1) amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, o));
++#pragma unroll
++    for (int o = 16; o > 0; o >>= 1) sum += __shfl_xor_sync(0xffffffffu, sum, o);
++    const float d = q8_1_finite(q81_div(amax, 127.0f));
++    const int8_t q = q8_1_quant(xi, d, amax);
++    GrQ81* y = reinterpret_cast<GrQ81*>(q8) + c / 32;
++    y->qs[c % 32] = q;
++    if (c % 32 == 0) y->ds = q8_1_ds(d, sum);
++}
+ template <int T, bool DP = false, int Q8 = 0>   // Q8: 0 bf16, 1 int8 (E693 scales), 2 int8 on Q8_0's grid (E708)
+ __global__ void __launch_bounds__(THREADS) persist_kernel(PArgs f) {
+     static_assert(!(DP && Q8), "the double reference reads the bf16 weights");
+@@ -3678,7 +3695,10 @@ __global__ void __launch_bounds__(THREADS) persist_kernel(PArgs f) {
+         float s = 0.0f;
+ #pragma unroll
+         for (int c = 0; c < HC; ++c) s += g[k][c][col];
+-        f.a[k].mixed[b * UPC + col] = s / (float) HC;
++        const float mv = s / (float) HC;
++        f.a[k].mixed[b * UPC + col] = mv;
++        if constexpr (UPC == 32)
++            if (f.a[0].q8_mixed != nullptr) hcp_q81_store(f.a[k].q8_mixed, b * UPC + col, mv);   // E760 (warp-uniform)
+     }
+ }
+ struct DevState {
+@@ -3985,8 +4005,12 @@ bool fused_gr_read_persist(const FusedGrArgs* a, int n_tok, void* stream) {
+     const hcp::DevState& st = hcp::g_dev[dev];
+     if (n_tok > st.max_t) return false;
+     if (a[0].q8_down != nullptr || a[0].q8_up != nullptr) return false;    // STRATA_HC_Q8: the default read
+-    for (int t = 0; t < n_tok; ++t)
+-        if (a[t].q8_mixed != nullptr) return false;                         // STRATA_QFUSE: the default read
++    // [claude] E760 STRATA_HCP_Q81=1: the read writes every token's q8_1 image itself (UPC == 32), all tokens or none;
++    // otherwise q8_mixed means STRATA_QFUSE: the default read
++    static const bool q81_env = [] { const char* v = std::getenv("STRATA_HCP_Q81"); return v != nullptr && v[0] == '1'; }();
++    int n_q8 = 0;
++    for (int t = 0; t < n_tok; ++t) n_q8 += a[t].q8_mixed != nullptr;
++    if (n_q8 != 0 && (!q81_env || hcp::UPC != 32 || n_q8 != n_tok)) return false;
+     const hcp::Q8Set* q8 = nullptr;
+     if (a[0].q8_key != nullptr) {   // [claude] STRATA_HC_I8ONLY: no BF16 to fall back on
+         auto it = st.q8_ok ? hcp::g_q8[dev].find(a[0].q8_key) : hcp::g_q8[dev].end();
+diff --git a/src/kernels/cuda/native_router.cu b/src/kernels/cuda/native_router.cu
+index 6611bceb0..3e6aebb75 100644
+--- a/src/kernels/cuda/native_router.cu
++++ b/src/kernels/cuda/native_router.cu
+@@ -96,13 +96,9 @@ __global__ void route(const float* __restrict__ logits, int32_t* __restrict__ id
+     const float inverse_selected_sum = 1.0f / selected_sum;
+     if (lane < 10) weights[lane] = selected * inverse_selected_sum;
+ }
+-__launch_bounds__(256, 1)
+-__global__ void route_multi(const float* __restrict__ logits, int32_t* __restrict__ ids,
+-                            float* __restrict__ weights, int n_tok) {
+-    const int tk = (int) blockIdx.x * 8 + (int) threadIdx.y;
+-    if (tk >= n_tok) return;
+-    logits += (size_t) tk * 512; ids += (size_t) tk * 10; weights += (size_t) tk * 10;
+-    const int lane = threadIdx.x;
++// one token's softmax + top-10 + renormalise, one warp (lane = threadIdx.x); route_multi and route_multi_bell share it
++__device__ __forceinline__ void route_one_top10(const float* __restrict__ logits, int32_t* __restrict__ ids,
++                                                float* __restrict__ weights, const int lane) {
+     float values[16];
+ #pragma unroll
+     for (int i = 0; i < 16; ++i) values[i] = logits[lane + i * 32];
+@@ -148,6 +144,41 @@ __global__ void route_multi(const float* __restrict__ logits, int32_t* __restric
+     const float inverse_selected_sum = 1.0f / selected_sum;
+     if (lane < 10) weights[lane] = selected * inverse_selected_sum;
+ }
++__launch_bounds__(256, 1)
++__global__ void route_multi(const float* __restrict__ logits, int32_t* __restrict__ ids,
++                            float* __restrict__ weights, int n_tok) {
++    const int tk = (int) blockIdx.x * 8 + (int) threadIdx.y;
++    if (tk >= n_tok) return;
++    route_one_top10(logits + (size_t) tk * 512, ids + (size_t) tk * 10, weights + (size_t) tk * 10, (int) threadIdx.x);
++}
++// [claude] E759 STRATA_ROUTE_BELL (opt-in): the router and the doorbell that follows it in one launch, for n_tok <= 8
++// (one block).  After the top-10 the block publishes exactly as doorbell_publish_kernel does - x, ids, weights to the
++// mapped buffers, a system fence, the block barrier, then the ring incremented (and fenced again on HIP, #697) - so the
++// host sees the same bytes in the same order, one graph node earlier.
++__launch_bounds__(256, 1)
++__global__ void route_multi_bell(const float* __restrict__ logits, int32_t* __restrict__ ids, float* __restrict__ weights,
++                                 int n_tok, const float* __restrict__ x, int n_x, float* x_out, int32_t* ids_out,
++                                 float* w_out, uint32_t* seq) {
++    const int tk = (int) threadIdx.y;
++    if (tk < n_tok)
++        route_one_top10(logits + (size_t) tk * 512, ids + (size_t) tk * 10, weights + (size_t) tk * 10, (int) threadIdx.x);
++    __syncthreads();
++    const int tid = (int) threadIdx.y * 32 + (int) threadIdx.x;
++    for (int i = tid; i < n_x; i += 256) x_out[i] = x[i];
++    if (tid < n_tok * 10) {
++        ids_out[tid] = ids[tid];
++        if (w_out != nullptr) w_out[tid] = weights[tid];
++    }
++    __threadfence_system();
++    __syncthreads();
++    if (tid == 0) {
++        *(volatile uint32_t*) seq = *(volatile uint32_t*) seq + 1u;
++#if defined(__HIPCC__)
++        __threadfence_system();
++#endif
++    }
++}
++
+ // The same contract for other (experts, top-k) shapes - Qwen3.6-35B-A3B's 256 / 8 - one warp per token, n_tok tokens
+ // (8 per block).  The 512 / 10 path keeps its own kernels above (the Flash-Next bits), this template is only used
+ // for the other shapes.
+@@ -233,6 +264,16 @@ void native_router_top10_multi(const float* logits, int32_t* ids, float* weights
+     const auto error = cudaGetLastError();
+     if (error != cudaSuccess) throw std::runtime_error(cudaGetErrorString(error));
+ }
++void native_router_top10_multi_bell(const float* logits, int32_t* ids, float* weights, int n_tok, const float* x, int64_t n_x,
++                                    float* x_out, int32_t* ids_out, float* w_out, uint32_t* seq, void* stream) {
++    if (!stream || n_tok < 1 || n_tok > 8 || !valid(logits, (size_t) n_tok * 512 * 4) || !valid(ids, (size_t) n_tok * 10 * 4) ||
++        !valid(weights, (size_t) n_tok * 10 * 4) || x == nullptr || x_out == nullptr || ids_out == nullptr || seq == nullptr)
++        throw std::invalid_argument("native router + doorbell needs a stream, 1..8 tokens and the publish buffers");
++    route_multi_bell<<<1, dim3(32, 8), 0, static_cast<cudaStream_t>(stream)>>>(logits, ids, weights, n_tok, x, (int) n_x, x_out,
++                                                                              ids_out, w_out, seq);
++    const auto error = cudaGetLastError();
++    if (error != cudaSuccess) throw std::runtime_error(cudaGetErrorString(error));
++}
+ bool native_router_topk_supported(int n_expert, int k) { return (n_expert == 512 && k == 10) || (n_expert == 256 && k == 8); }
+ void native_router_topk(const float* logits, int32_t* ids, float* weights, int n_expert, int k, int n_tok, void* stream) {
+     if (n_expert == 512 && k == 10) {   // Flash-Next: the pinned kernels above, unchanged
+diff --git a/src/kernels/cuda/verify_kernels.cu b/src/kernels/cuda/verify_kernels.cu
+index 7b2553784..cbaeaeeae 100644
+--- a/src/kernels/cuda/verify_kernels.cu
++++ b/src/kernels/cuda/verify_kernels.cu
+@@ -653,6 +653,20 @@ __global__ void fetch_blobs_kernel(const unsigned long long* __restrict__ src, c
+     }
+ }
+ 
++// [claude] E763 B5: fetch_blobs_kernel's copy, and block 0 writes the staged pointers rebase_ptrs_kernel writes - into `out`
++__global__ void fetch_rebase_kernel(const unsigned long long* __restrict__ src, const int32_t* __restrict__ n,
++                                    uint4* __restrict__ dst, long long per, unsigned long long* __restrict__ out, int cap) {
++    const int cnt = *n;
++    if (blockIdx.x == 0 && (int) threadIdx.x < cnt && (int) threadIdx.x < cap)
++        out[threadIdx.x] = (unsigned long long) dst + (unsigned long long) threadIdx.x * (unsigned long long) per * 16ull;
++    const long long total = (long long) cnt * per;
++    for (long long i = (long long) blockIdx.x * blockDim.x + threadIdx.x; i < total;
++         i += (long long) gridDim.x * blockDim.x) {
++        const long long k = i / per, off = i - k * per;
++        dst[i] = ((const uint4*) src[k])[off];
++    }
++}
++
+ __global__ void res_patch_kernel(int32_t* __restrict__ table, const volatile int32_t* pairs, int n) {
+     for (int k = blockIdx.x * blockDim.x + threadIdx.x; k < n; k += gridDim.x * blockDim.x) table[pairs[2 * k]] = pairs[2 * k + 1];
+ }
+@@ -766,6 +780,15 @@ void rebase_ptrs(unsigned long long* ptr, const int32_t* n, uint8_t* base, int64
+     check("rebase_ptrs");
+ }
+ 
++void fetch_blobs_rebase(const unsigned long long* src, const int32_t* n, uint8_t* dst, int64_t blob_bytes, int cap,
++                        unsigned long long* out, void* stream) {
++    if (cap <= 0) return;
++    if (blob_bytes % 16 != 0) { std::fprintf(stderr, "fetch_blobs_rebase: blob size must be a multiple of 16\n"); std::exit(1); }
++    if (cap > 256) { std::fprintf(stderr, "fetch_blobs_rebase: at most 256 staged blobs\n"); std::exit(1); }
++    fetch_rebase_kernel<<<48 * 8, 256, 0, (cudaStream_t) stream>>>(src, n, (uint4*) dst, (long long) (blob_bytes / 16), out, cap);
++    check("fetch_blobs_rebase");
++}
++
+ void add_streams_broadcast(const float* h, const float* e, float* R, int64_t n_embd, int hc, int n_tok, void* stream) {
+     add_streams_broadcast_kernel<<<dim3((unsigned) ((n_embd * hc + 255) / 256), (unsigned) n_tok), 256, 0,
+                                    (cudaStream_t) stream>>>(h, e, R, n_embd, hc);
+diff --git a/src/kernels/hc_persist_parity.cpp b/src/kernels/hc_persist_parity.cpp
+index 1808a0926..f6057a48e 100644
+--- a/src/kernels/hc_persist_parity.cpp
++++ b/src/kernels/hc_persist_parity.cpp
+@@ -9,6 +9,7 @@
+ // `--off`: with STRATA_HC_PERSIST unset the persistent read must never run (the default path is untouched).
+ // GPU, synthetic, no model.
+ #include "strata/kernels/fused_gr.hpp"
++#include "strata/kernels/native_mmvq.hpp"
+ 
+ #include <cuda_runtime.h>
+ 
+@@ -59,6 +60,7 @@ int main(int argc, char** argv) {
+     const bool off = argc > 1 && std::strcmp(argv[1], "--off") == 0;
+     if (off) unsetenv("STRATA_HC_PERSIST");
+     else setenv("STRATA_HC_PERSIST", "1", 1);
++    if (!off) setenv("STRATA_HCP_Q81", "1", 1);   // [claude] E760: read once, before the first persistent read
+     k::fused_gr_check();
+     k::fused_gr_persist_init();
+ 
+@@ -144,7 +146,41 @@ int main(int argc, char** argv) {
+         }
+         const double rel = md / (mref > 0 ? mref : 1.0);
+         const bool same = std::memcmp(out[1].data(), out[2].data(), out[1].size() * 4) == 0;
+-        const bool ok = finite && rel < 1e-4 && same;
++        // [claude] E760 STRATA_HCP_Q81: the read also writes each token's q8_1 image; it must be byte for byte what
++        // native_quantize_q8_1 makes of the mixed row it stored, and the stored rows must not change
++        bool q8_ok = true;
++        {
++            const size_t qb = (size_t) (N / 32) * 36;
++            uint8_t* dq = dev<uint8_t>((size_t) TM * qb);
++            uint8_t* dr = dev<uint8_t>((size_t) TM * qb);
++            ck(cudaMemcpy(dR, R.data(), R.size() * 4, cudaMemcpyHostToDevice), "R");
++            ck(cudaMemset(dmix, 0xff, (size_t) TM * N * 4), "mix");
++            ck(cudaMemset(dq, 0x5a, (size_t) TM * qb), "q");
++            k::FusedGrArgs aq[TM];
++            for (int t = 0; t < T; ++t) { aq[t] = a[t]; aq[t].q8_mixed = dq + (size_t) t * qb; }
++            ck(cudaDeviceSynchronize(), "sync");
++            const bool used_q = k::fused_gr_read_persist(aq, T, nullptr);
++            ck(cudaDeviceSynchronize(), "read q8");
++            std::vector<float> mq((size_t) T * N);
++            ck(cudaMemcpy(mq.data(), dmix, mq.size() * 4, cudaMemcpyDeviceToHost), "d2h mix q8");
++            cudaStream_t qst = nullptr;
++            ck(cudaStreamCreate(&qst), "stream");
++            k::native_quantize_q8_1(dmix, dr, N, T, qst);
++            ck(cudaStreamSynchronize(qst), "quantize");
++            cudaStreamDestroy(qst);
++            std::vector<uint8_t> hq((size_t) T * qb), hr((size_t) T * qb);
++            ck(cudaMemcpy(hq.data(), dq, hq.size(), cudaMemcpyDeviceToHost), "d2h q");
++            ck(cudaMemcpy(hr.data(), dr, hr.size(), cudaMemcpyDeviceToHost), "d2h r");
++            size_t diff = 0;
++            for (size_t i = 0; i < hq.size(); ++i) diff += hq[i] != hr[i];
++            const bool mix_same = std::memcmp(mq.data(), out[1].data(), mq.size() * 4) == 0;
++            q8_ok = used_q && diff == 0 && mix_same;
++            std::printf("T=%d: STRATA_HCP_Q81 q8_1 images %s (%zu of %zu bytes differ), mixed %s  %s\n", T,
++                        used_q ? "written" : "NOT TAKEN", diff, hq.size(), mix_same ? "unchanged" : "CHANGED", q8_ok ? "ok" : "FAIL");
++            cudaFree(dq);
++            cudaFree(dr);
++        }
++        const bool ok = finite && rel < 1e-4 && same && q8_ok;
+         std::printf("T=%d: max relative difference %.3g against the default read, %s, two runs %s  %s\n", T, rel,
+                     finite ? "finite" : "NON-FINITE", same ? "bitwise equal" : "DIFFER", ok ? "ok" : "FAIL");
+         if (!ok) ++bad;
+diff --git a/src/program/generate.cpp b/src/program/generate.cpp
+index bbb87cdcd..041a06f79 100644
+--- a/src/program/generate.cpp
++++ b/src/program/generate.cpp
+@@ -97,6 +97,7 @@
+ #endif
+ #include "strata/core/native_dense.hpp"
+ #include "strata/program/adapt_decay.hpp"
++#include "strata/program/vram_calib.hpp"
+ #include "strata/program/batch_read.hpp"
+ #include "strata/program/logits_selection.hpp"
+ #include "strata/program/conv_cache.hpp"
+@@ -3294,22 +3295,34 @@ static void exit_if_gpu_fatal(const std::string& err) {
+ // (STRATA_VRAM_CALIB_MARGIN_MIB, 192) free instead of --vram-reserve-mib / --vram-reserve-later-mib and the fixed late-
+ // allocation terms.  No file (a new binary or config): the start sizes as before and writes one.
+ namespace vcal {
++// [claude] E762: switches that only measure or report (no VRAM of their own beyond noise) - a run that differs only in them
++// keeps the same calibration (an A/B arm with STRATA_TRACE or a dummy-node probe is not a new configuration)
++inline bool measure_only(const char* kv) {
++    static const char* const names[] = {"STRATA_TRACE=", "STRATA_DECODE_TIMING=", "STRATA_PREFILL_TIMING=", "STRATA_DISPATCH_REPORT=",
++                                        "STRATA_VERIFY_NODES=", "STRATA_DP_TRACE=", "STRATA_DUMMY_AT=", "STRATA_DUMMY_AT_N=",
++                                        "STRATA_DUMMY_NODES="};
++    for (const char* n : names)
++        if (std::strncmp(kv, n, std::strlen(n)) == 0) return true;
++    return false;
++}
+ struct Card { int dev = -1; long long need = -1, grow = 0, seal_free = -1, low_free = -1; };
+-struct State { bool on = false, loaded = false; std::string path; long long margin_mib = 192; std::vector<Card> prev, cur; };
++struct State { bool on = false, loaded = false, from_hint = false; std::string path, hint_path; long long margin_mib = 192; std::vector<Card> prev, cur, hint; };
+ inline State& st() { static State s; return s; }
+ inline void init(int argc, char** argv) {
+     const char* v = std::getenv("STRATA_VRAM_CALIB");
+     if (v == nullptr || v[0] != '1') return;
+     State& s = st();
+     s.on = true;
+-    if (const char* m = std::getenv("STRATA_VRAM_CALIB_MARGIN_MIB")) s.margin_mib = std::max(0, std::atoi(m));
++    s.margin_mib = strata::program::vram_calib::margin_mib(std::getenv("STRATA_VRAM_CALIB_MARGIN_MIB"));   // a number or tight / normal / safe
+     std::string key;
+     struct stat sb {};
+     if (stat("/proc/self/exe", &sb) == 0) key += std::to_string((long long) sb.st_size) + ":" + std::to_string((long long) sb.st_mtime) + ";";
++    const std::string exe_id = key;   // [claude] E762: the binary alone (the grow hint below)
+     for (int i = 1; i < argc; ++i) { key += argv[i]; key += '\x1f'; }
+     std::vector<std::string> env;
+     for (char** e = environ; e != nullptr && *e != nullptr; ++e)
+-        if (std::strncmp(*e, "STRATA_", 7) == 0 && std::strncmp(*e, "STRATA_VRAM_", 12) != 0) env.emplace_back(*e);   // the ledger's own switches do not change the sizing
++        if (std::strncmp(*e, "STRATA_", 7) == 0 && std::strncmp(*e, "STRATA_VRAM_", 12) != 0 && !measure_only(*e))
++            env.emplace_back(*e);   // the ledger's own switches and (E762) the measurement-only ones do not change the sizing
+     std::sort(env.begin(), env.end());
+     for (const auto& e : env) { key += e; key += '\x1e'; }
+     uint64_t h = 1469598103934665603ull;   // FNV-1a
+@@ -3327,7 +3340,47 @@ inline void init(int argc, char** argv) {
+         while (std::fscanf(f, "%d %lld %lld", &c.dev, &c.need, &c.grow) == 3) s.prev.push_back(c);
+         std::fclose(f);
+     }
++    {   // [claude] E771: a card whose written need is too little to be real (an older binary could write E769's 0 MiB) counts as
++        // not calibrated - it is sized with the fixed terms - instead of keeping no room on that card
++        std::vector<Card> kept;
++        for (const Card& c : s.prev) {
++            if (strata::program::vram_calib::judge_need(c.need, -1) == strata::program::vram_calib::NeedVerdict::Skip)
++                std::fprintf(stderr, "strata vram: CUDA%d calibration: WARNING: the file says %lld MiB allocated after the cache - too "
++                                     "little to be real, not used; this card is sized with the fixed terms (E771)\n", c.dev, c.need >> 20);
++            else kept.push_back(c);
++        }
++        s.prev.swap(kept);
++    }
+     s.loaded = !s.prev.empty();
++    // [claude] E771: the calibration is held aside (".inuse") from here until this start's seal writes it again: a start that
++    // fails before its seal (E769: a calibration that sized the cache too large left no room for the draft head, and every
++    // later start failed the same way without ever reaching a seal) leaves no file, and the next start falls back to the
++    // binary's hint below or the fixed terms.
++    if (s.loaded) std::rename(s.path.c_str(), (s.path + ".inuse").c_str());
++    {   // [claude] E762: the last growth measured with this binary (any config), for a first start of a new config
++        uint64_t hh = 1469598103934665603ull;
++        for (const unsigned char c : exe_id) { hh ^= c; hh *= 1099511628211ull; }
++        char hx[24];
++        std::snprintf(hx, sizeof hx, "%016llx", (unsigned long long) hh);
++        s.hint_path = dir + "/grow-" + hx + ".txt";
++        if (FILE* f = std::fopen(s.hint_path.c_str(), "r")) {
++            Card c;
++            while (std::fscanf(f, "%d %lld %lld", &c.dev, &c.need, &c.grow) == 3)
++                if (strata::program::vram_calib::judge_need(c.need, -1) != strata::program::vram_calib::NeedVerdict::Skip)
++                    s.hint.push_back(c);   // [claude] E771: the same check as the config's own file
++            std::fclose(f);
++        }
++    }
++    // [claude] E762: no calibration for this config, but one for this binary: start from it (the need after the cache and the
++    // growth were the same across this binary's configs, E762) - a first start then sizes its caches as a calibrated start
++    // does instead of with the fixed terms, and writes this config's own measurement for the next one.  A config that does
++    // need more is reported at the seal ("MORE than the calibration") and the margin pays for it until then.
++    s.from_hint = !s.loaded && !s.hint.empty();
++    if (s.from_hint) { s.prev = s.hint; s.loaded = true; }
++    if (s.from_hint)
++        std::fprintf(stderr, "strata vram: STRATA_VRAM_CALIB=1: no calibration for this config yet: sized from this binary's last "
++                             "one (%s), measured at the seal (%s)\n", s.hint_path.c_str(), s.path.c_str());
++    else
+     std::fprintf(stderr, "strata vram: STRATA_VRAM_CALIB=1: %s (%s)\n", s.loaded ? "calibration found, the caches keep what it measured free" :
+                  "no calibration for this binary and config yet: sized as before, measured at the seal", s.path.c_str());
+ }
+@@ -3347,6 +3400,17 @@ inline void save() {
+         for (const Card& c : s.cur) std::fprintf(f, "%d %lld %lld\n", c.dev, c.need, c.grow);
+         std::fclose(f);
+         std::rename(tmp.c_str(), s.path.c_str());
++        std::remove((s.path + ".inuse").c_str());   // [claude] E771: written again, the held-aside copy goes
++    }
++    bool any_grow = false;   // [claude] E762: the binary's growth hint, once a request has shown it
++    for (const Card& c : s.cur) any_grow = any_grow || c.grow > 0;
++    if (any_grow && !s.hint_path.empty()) {
++        const std::string ht = s.hint_path + ".tmp";
++        if (FILE* f = std::fopen(ht.c_str(), "w")) {
++            for (const Card& c : s.cur) std::fprintf(f, "%d %lld %lld\n", c.dev, c.need, c.grow);
++            std::fclose(f);
++            std::rename(ht.c_str(), s.hint_path.c_str());
++        }
+     }
+ }
+ inline long long free_on(int dev) {
+@@ -3371,9 +3435,27 @@ inline void at_seal(int dev, long long cache_bytes) {
+     Card c;
+     c.dev = dev; c.need = std::max(0ll, fm - fn - cache_bytes); c.seal_free = fn; c.low_free = fn;
+     for (const Card& p : s.prev) if (p.dev == dev) c.grow = std::max(0ll, p.grow);   // kept until this run shows its own
+-    s.cur.push_back(c);
+     long long prev_need = -1;
+     for (const Card& p : s.prev) if (p.dev == dev) prev_need = p.need;
++    // [claude] E771: a measurement far below the last one is not taken.  E769 OFF_5: ~10 GiB of card 0's cache chunks were made
++    // on card 1 (see vmm.hpp), card 1 measured "0 MiB allocated after the cache", that went into the file, and every later
++    // start kept 0 MiB free on card 1 - its cache grew past the draft head's room.  A need that rises is always taken (that is
++    // the safe direction); one that falls by more than half and by more than 64 MiB keeps the earlier figure.  Without an
++    // earlier figure, a need under 32 MiB is not written for the card (the next start sizes it with the fixed terms).
++    const long long raw = fm - fn - cache_bytes;
++    constexpr long long kMiB = 1ll << 20;
++    const auto verdict = strata::program::vram_calib::judge_need(raw, prev_need);
++    if (verdict == strata::program::vram_calib::NeedVerdict::KeepPrev) {
++        std::fprintf(stderr, "strata vram: CUDA%d calibration: WARNING: measured %lld MiB allocated after the cache, the calibration "
++                             "said %lld MiB - not taken (another card's allocation on this one, or a reading during a free); the "
++                             "earlier figure stays (E771)\n", dev, raw / kMiB, prev_need / kMiB);
++        c.need = prev_need;
++    } else if (verdict == strata::program::vram_calib::NeedVerdict::Skip) {
++        std::fprintf(stderr, "strata vram: CUDA%d calibration: WARNING: measured %lld MiB allocated after the cache - too little to be "
++                             "real, not written; the next start sizes this card with the fixed terms (E771)\n", dev, raw / kMiB);
++        return;
++    }
++    s.cur.push_back(c);
+     std::fprintf(stderr, "strata vram: CUDA%d calibration: %lld MiB allocated after the cache was sized (free %lld MiB then, "
+                          "%lld MiB now, cache %lld MiB); the next start keeps %lld MiB free after its cache%s\n", dev, c.need >> 20,
+                  fm >> 20, fn >> 20, cache_bytes >> 20, (c.need + c.grow + (1ll << 20) - 1) / (1ll << 20) + s.margin_mib,
+@@ -10985,6 +11067,14 @@ int main(int argc, char** argv) {
+             int64_t lent_chunk = 0;
+             std::vector<std::pair<int32_t, int32_t>> lent;
+             int64_t keep_head = 0;         // [claude] STRATA_SLOT_LAZY: the head slots a loan must leave (the slot sessions' region)
++            // [claude] E751 STRATA_REFILL_ASYNC: the loan's refill still in flight on this card's own non-blocking stream,
++            // in batches; a batch's rows are published (host_res, then the device tables) once its event has completed
++            // E751e: batches are queued on the host and only kRfInflight of them are on the stream at a time - a copy engine
++            // runs copies in order, so the decode's own small copies would otherwise wait behind the whole refill
++            struct RfCopy { const uint8_t* src; uint8_t* dst; size_t nb; };
++            struct RfBatch { cudaEvent_t ev = nullptr; bool issued = false; std::vector<std::pair<int32_t, int32_t>> rows; std::vector<RfCopy> cp; };
++            std::vector<RfBatch> rf;
++            cudaStream_t rf_stream = nullptr;
+         };
+         // bytes -> slots for one cache: exact when it knows its per-slot offsets (a native pack's blobs differ
+         // per layer), otherwise max_blob each.
+@@ -13335,8 +13425,116 @@ int main(int argc, char** argv) {
+             }
+             return r;
+         };
++        // [claude] E751 STRATA_REFILL_ASYNC: publish the background refill's batches whose copies have landed (all of them
++        // with `wait`).  Until then those experts stay non-resident, so a window computes them on the CPU, as during the
++        // prompt.  An expert the adaptive tier has placed elsewhere meanwhile keeps that place; its refilled slot stays
++        // unowned until the next loan takes it.
++        Clock::time_point rf_t0{};   // [claude] E751: when the background refill was issued (the publish trace)
++        static const bool rf_trace = std::getenv("STRATA_TRACE") != nullptr;
++        int64_t rf_polls = 0, rf_polls_idle = 0, rf_topups = 0, rf_issued = 0;   // [claude] E751 diagnosis: polls since the issue / ones that found nothing ready
++        double rf_first_poll_ms = -1.0;
++        bool rf_res_dirty = false;   // [claude] E751e: rows published while a pipelined window was in flight; the device tables follow at the next idle poll
++        // [claude] E751e: the asynchronous tier's rules for the pipelined windows (see the comment above AHome): while any window
++        // is in flight, no CUDA call reaches a card whose window may wait on this thread (issue #31) and the device tables
++        // are not uploaded (a synchronous copy) - so then only `only_dev`'s own batches move, and only while neither of its
++        // verifiers has a window in flight; with nothing in flight every card moves and the tables follow
++        auto refill_async_poll = [&](bool wait, bool top_up = true, int only_dev = -1) -> int64_t {
++            int64_t published = 0;
++            bool any = false;
++            bool pl_busy = false;
++            if (pipe)
++                for (int st = 0; st < n_stages; ++st)
++                    for (int par = 0; par < 2; ++par) pl_busy = pl_busy || stage_ver_p(st, par).in_flight();
++            auto card_idle = [&](int dev) {
++                if (!pipe) return true;
++                for (int st = 0; st < n_stages; ++st)
++                    for (int par = 0; par < 2; ++par) {
++                        const strata::core::Verifier& v = stage_ver_p(st, par);
++                        if (v.device() == dev && v.in_flight()) return false;
++                    }
++                return true;
++            };
++            if (!pl_busy && rf_res_dirty && res_upload() == cudaSuccess) {
++                rf_res_dirty = false;
++                drive.d.res_dirty = false;
++                drive.d.res_dirty_idx.clear();
++            }
++            bool queued = false;
++            for (const PfPart& p : pf_parts) queued = queued || !p.rf.empty();
++            if (queued && rf_trace) {
++                ++rf_polls;
++                if (rf_first_poll_ms < 0) rf_first_poll_ms = std::chrono::duration<double, std::milli>(Clock::now() - rf_t0).count();
++            }
++            static const size_t kRfInflight = [] { const char* v = std::getenv("STRATA_REFILL_INFLIGHT"); return v != nullptr && std::atoi(v) > 0 ? (size_t) std::atoi(v) : (size_t) 2; }();
++            auto rf_top_up = [&](PfPart& p) {   // keep up to kRfInflight batches on the stream
++                const strata::core::OnDevice on(p.dev);
++                size_t live = 0;
++                for (PfPart::RfBatch& b : p.rf) {
++                    if (b.issued) { ++live; continue; }
++                    if (live >= kRfInflight) break;
++                    bool ok = true;
++                    for (const PfPart::RfCopy& c : b.cp) {
++                        if (cudaMemcpyAsync(c.dst, c.src, c.nb, cudaMemcpyHostToDevice, p.rf_stream) != cudaSuccess) { ok = false; break; }
++                        srcp->note_async_read(c.src, (void*) p.rf_stream);   // #1237
++                    }
++                    if (!ok || cudaEventCreateWithFlags(&b.ev, cudaEventDisableTiming) != cudaSuccess ||
++                        cudaEventRecord(b.ev, p.rf_stream) != cudaSuccess) {
++                        (void) cudaGetLastError();
++                        (void) cudaStreamSynchronize(p.rf_stream);   // fall back: what was queued has landed
++                        if (b.ev == nullptr) (void) cudaEventCreateWithFlags(&b.ev, cudaEventDisableTiming);
++                        if (b.ev != nullptr) (void) cudaEventRecord(b.ev, p.rf_stream);
++                        if (!ok) for (const PfPart::RfCopy& c : b.cp) (void) cudaMemcpy(c.dst, c.src, c.nb, cudaMemcpyHostToDevice);
++                    }
++                    b.issued = true;
++                    ++rf_issued;
++                    b.cp.clear();
++                    b.cp.shrink_to_fit();
++                    ++live;
++                }
++            };
++            for (PfPart& p : pf_parts) {
++                if (pl_busy && (wait || only_dev < 0 || p.dev != only_dev || !card_idle(p.dev))) continue;
++                size_t k = 0;
++                for (; k < p.rf.size(); ++k) {
++                    const strata::core::OnDevice on(p.dev);
++                    if (!p.rf[k].issued) {
++                        if (!wait) break;
++                        if (k > 0) { p.rf.erase(p.rf.begin(), p.rf.begin() + (std::ptrdiff_t) k); k = 0; }
++                        rf_top_up(p);
++                    }
++                    if (wait) (void) cudaEventSynchronize(p.rf[k].ev);
++                    else if (cudaEventQuery(p.rf[k].ev) != cudaSuccess) break;
++                    for (const auto& [i, slot] : p.rf[k].rows)
++                        if (host_res[(size_t) i] == strata::core::kNotResident) { host_res[(size_t) i] = slot; ++published; }
++                    (void) cudaEventDestroy(p.rf[k].ev);
++                    any = true;
++                }
++                if (k > 0) p.rf.erase(p.rf.begin(), p.rf.begin() + (std::ptrdiff_t) k);
++                if (!p.rf.empty() && top_up) { ++rf_topups; rf_top_up(p); }
++            }
++            (void) cudaGetLastError();   // a not-ready query is not an error
++            if (queued && !any && rf_trace) ++rf_polls_idle;
++            if (any && rf_trace) {
++                std::fprintf(stderr, "strata trace: refill polls so far %lld (%lld found nothing ready, %lld top-ups, %lld batches issued), first poll %.1f ms after issue\n",
++                             (long long) rf_polls, (long long) rf_polls_idle, (long long) rf_topups, (long long) rf_issued, rf_first_poll_ms);
++                size_t left = 0;
++                for (const PfPart& p : pf_parts) left += p.rf.size();
++                std::fprintf(stderr, "strata trace: background refill published %lld slots%s, %zu batches left, %.1f ms after issue\n",
++                             (long long) published, wait ? " (waited)" : "", left,
++                             std::chrono::duration<double, std::milli>(Clock::now() - rf_t0).count());
++                std::fflush(stderr);
++            }
++            if (any && pl_busy) rf_res_dirty = true;
++            else if (any && res_upload() == cudaSuccess) {   // the whole table, as apply_pending
++                drive.d.res_dirty = false;
++                drive.d.res_dirty_idx.clear();
++            }
++            return published;
++        };
+         auto apply_pending = [&](bool wait) {
+             if (peer.valid()) peer.apply_pending(wait);
++            refill_async_poll(false);   // [claude] E751: never a wait here (the plain decode calls this with wait each window)
++            (void) wait;
+             if (pending.empty()) return;
+             if (wait) cudaEventSynchronize(adapt_ev);
+             else if (cudaEventQuery(adapt_ev) != cudaSuccess) return;
+@@ -13457,9 +13655,16 @@ int main(int argc, char** argv) {
+                 if (pairs != nullptr) cudaFreeHost(pairs);
+             }
+         } pre_launch_off{ver, stages, drive.d, res_pairs};
++        // [claude] E751 STRATA_REFILL_ASYNC: every window launch (every decode path: plain, pipelined, batch) first publishes
++        // the background refill's batches that have landed - the one hook all of them pass
++        static const bool refill_async_hook = [] { const char* v = std::getenv("STRATA_REFILL_ASYNC"); return v != nullptr && v[0] == '1'; }();
++        if (refill_async_hook && !(drive.d.evict_sync || res_checking)) {
++            ver.set_pre_launch([&](cudaStream_t, std::string&) { refill_async_poll(false, true, ver.device()); return true; });
++            for (auto& st : stages) { const int sd = st->dev; st->ver.set_pre_launch([&, sd](cudaStream_t, std::string&) { refill_async_poll(false, true, sd); return true; }); }
++        }
+         if (drive.d.evict_sync || res_checking) {
+-            ver.set_pre_launch([&](cudaStream_t, std::string& e) { return res_sync(res_checking, e); });
+-            for (auto& st : stages) st->ver.set_pre_launch([&](cudaStream_t, std::string& e) { return res_sync(false, e); });
++            ver.set_pre_launch([&](cudaStream_t, std::string& e) { if (refill_async_hook) refill_async_poll(false, false); return res_sync(res_checking, e); });
++            for (auto& st : stages) st->ver.set_pre_launch([&](cudaStream_t, std::string& e) { if (refill_async_hook) refill_async_poll(false, false); return res_sync(false, e); });
+             if (drive.d.evict_sync)
+                 std::fprintf(stderr, "strata serve: the adaptive tier's evictions reach the device's table before the next "
+                                      "window (STRATA_ADAPT_EVICT_SYNC=0: when its copies land)\n");
+@@ -14549,6 +14754,7 @@ int main(int argc, char** argv) {
+                 return false;
+             }
+             if (peer.valid()) { e = "VRAM: not with --peer-device"; return false; }
++            refill_async_poll(true);   // [claude] E751: a background refill lands before the cache shrinks or grows
+             for (const PfPart& p : pf_parts)
+                 if (!p.lent.empty()) { e = "VRAM: a prompt's loan is still out"; return false; }
+             if (!ver.wait_commit(e)) return false;
+@@ -14560,7 +14766,7 @@ int main(int argc, char** argv) {
+             // (Not the start reserve: the start sized the cache with the reserve AND what is allocated after it, so a grow to
+             // "reserve free" left a later stage short of its start size - 5009 -> 4713 slots in E728.)
+             // [claude] E730h debug: STRATA_VRAM_FLOOR_MIB overrides the floor (does a grow to a nearly full card corrupt slots?)
+-            static const long long kVramFloorMib = [] { const char* v = std::getenv("STRATA_VRAM_FLOOR_MIB"); return v != nullptr && std::atoll(v) > 0 ? std::atoll(v) : 192LL; }();
++            static const long long kVramFloorMib = [] { const char* v = std::getenv("STRATA_VRAM_FLOOR_MIB"); return v != nullptr && std::atoll(v) > 0 ? std::atoll(v) : strata::program::vram_calib::margin_mib(std::getenv("STRATA_VRAM_CALIB_MARGIN_MIB")); }();   // sched step 1: one margin for the start and the grow-back
+             auto start_reserve = [&](const VramTarget&) -> long long { return kVramFloorMib; };
+             const auto t0 = Clock::now();
+             std::vector<int64_t> before(targets.size());
+@@ -14873,6 +15079,7 @@ int main(int argc, char** argv) {
+         // of ITS layer outside the region when it is hotter (a slot keeps its layer's blob size), else leaves the GPU: the
+         // cache then holds what a cache without the region would.  Then the residency goes up and the sessions are reset.
+         auto slot_borrow = [&](std::string& e) -> bool {
++            refill_async_poll(true);   // [claude] E751: no copy may still land in a slot the region takes
+             if (!slot_lazy || slot_borrowed) return true;
+             const auto t0 = Clock::now();
+             adapt_quiesce();
+@@ -17665,6 +17872,7 @@ int main(int argc, char** argv) {
+                     if (drive.d.failed) return fail(drive.d.fail ? drive.d.fail : "the expert pool failed");
+                 }
+                 pl_drain();   // nothing in flight: both stages' commits and the drafter's rows have landed
++                refill_async_poll(false);   // [claude] E751e: the deferred table upload, and the next batches
+                 pl_mtp_live[0] = pl_mtp_live[1] = false;
+                 const double ms = std::chrono::duration<double, std::milli>(Clock::now() - pp_t0).count();
+                 std::printf("PP %lld %lld %.0f %.1f\n", (long long) b, (long long) pp_total, ms,
+@@ -17798,8 +18006,72 @@ int main(int argc, char** argv) {
+             // waited for - the same copies into the same slots, so the same cache; one stage: refill_one exactly.
+             // STRATA_REFILL_SERIAL=1: stage after stage, as 0.1.30/0.1.31.
+             static const bool refill_serial = std::getenv("STRATA_REFILL_SERIAL") != nullptr;
+-            auto refill = [&](std::string& e) -> bool {
++            // [claude] E751 STRATA_REFILL_ASYNC=1 (opt-in): the prompt's final refill is only issued - hottest experts first
++            // (the adaptive tier's routing counts), on each card's own non-blocking stream, in batches of 256 slots - and the
++            // decode starts at once; refill_async_poll publishes each batch at a window gap once it has landed.  Not with
++            // STRATA_REFILL_PARTS / STRATA_REFILL_BLOCKING (those keep the waited refill).
++            static const bool refill_async = [] { const char* v = std::getenv("STRATA_REFILL_ASYNC"); return v != nullptr && v[0] == '1'; }();
++            auto refill_async_issue = [&](PfPart& p, std::string& e) -> bool {
++                const strata::core::OnDevice on(p.dev);
++                if (p.rf_stream == nullptr && cudaStreamCreateWithFlags(&p.rf_stream, cudaStreamNonBlocking) != cudaSuccess) {
++                    e = "STRATA_REFILL_ASYNC: cannot create the refill stream";
++                    return false;
++                }
++                std::vector<std::pair<float, size_t>> order;
++                order.reserve(p.lent.size());
++                for (size_t k = 0; k < p.lent.size(); ++k) {
++                    const int32_t i = p.lent[k].first;
++                    order.emplace_back(drive.d.usage.empty() ? 0.0f : drive.d.usage[(size_t) i], k);
++                }
++                std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
++                constexpr size_t kBatch = 256;
++                PfPart::RfBatch cur;
++                auto flush = [&]() -> bool {
++                    if (cur.rows.empty()) return true;
++                    p.rf.push_back(std::move(cur));
++                    cur = PfPart::RfBatch{};
++                    return true;
++                };
++                for (const auto& ok : order) {
++                    const int32_t i = p.lent[ok.second].first, slot = p.lent[ok.second].second;
++                    const uint8_t* b = srcp->blob_stable(i / g.n_expert, i % g.n_expert);
++                    const int64_t nb = (int64_t) strata::kernels::cpu::expert_layout().blob_bytes(i / g.n_expert);
++                    uint8_t* dst = p.cache->device_slot(slot);
++                    if (b == nullptr || dst == nullptr) {
++                        e = "STRATA_REFILL_ASYNC: a refill copy has no source or slot";
++                        return false;
++                    }
++                    cur.cp.push_back({b, dst, (size_t) nb});
++                    cur.rows.emplace_back(i, slot);
++                    if (cur.rows.size() >= kBatch && !flush()) return false;
++                }
++                if (!flush()) return false;
++                p.lent.clear();
++                p.lent_chunk = 0;
++                return true;
++            };
++            auto refill = [&](std::string& e, bool may_async = false) -> bool {
+                 const auto t_rf = Clock::now();
++                if (may_async && refill_async && !refill_parts && !refill_blocking()) {
++                    rf_t0 = Clock::now();
++                    rf_polls = rf_polls_idle = rf_topups = rf_issued = 0;
++                    rf_first_poll_ms = -1.0;
++                    int64_t n_lent = 0, n_parts = 0;
++                    for (PfPart& p : pf_parts) {
++                        if (p.lent.empty()) continue;
++                        n_lent += (int64_t) p.lent.size();
++                        ++n_parts;
++                        if (!refill_async_issue(p, e)) return false;
++                    }
++                    refill_async_poll(false);   // E751e: puts the first kRfInflight batches on each card's stream
++                    if (trace && n_parts > 0) {
++                        std::fprintf(stderr, "strata trace: refill of %lld slots on %lld stage(s) issued in the background in %.1f ms\n",
++                                     (long long) n_lent, (long long) n_parts,
++                                     std::chrono::duration<double, std::milli>(Clock::now() - t_rf).count());
++                        std::fflush(stderr);
++                    }
++                    return true;
++                }
+                 int64_t n_lent = 0, n_parts = 0;
+                 for (PfPart& p : pf_parts)
+                     if (!p.lent.empty()) { n_lent += (int64_t) p.lent.size(); ++n_parts; }
+@@ -17826,6 +18098,7 @@ int main(int argc, char** argv) {
+             // participant's own cache, and marking only that participant's own layers
+             int64_t seg_lend = 0;   // the loan the last lend left (the largest participant's chunk; 0: none)
+             auto lend = [&](int64_t tokens, std::string& e, int64_t exact) -> bool {
++                refill_async_poll(true);   // [claude] E751: the previous prompt's background refill lands before slots are lent again
+                 seg_lend = 0;
+                 if (pf_parts.empty()) return true;                     // its own buffers: nothing to lend
+                 // [claude] STRATA_DP_LAZY: a read the DP path will take borrows its foreign sessions' rooms with its buffers;
+@@ -18121,6 +18394,13 @@ int main(int argc, char** argv) {
+                         }
+                         if (de.rfind("prefill DP: the p", 0) != 0) { e = de; return false; }
+                         std::fprintf(stderr, "strata serve: %s - the layer pipeline reads it\n", de.c_str());
++                        if (head > 0) {
++                            // [claude] fix: the head [q, q + head) is already read (its K/V written and the GDN state advanced
++                            // past it): read only the rest - from q again would run the head through the recurrence twice.
++                            // No plan: it was made for [q, r)'s grid.
++                            if (!conc_read) share_gate();
++                            return sp.run(ids.data() + q + head, r - q - head, q + head, e);
++                        }
+                     }
+                     if (planned) sp.force_chunk(plan.chunk, plan_single, plan.chunked);
+                     if (!conc_read) share_gate();   // STRATA_PREFILL_CPU_SHARE_BATCH: re-decided for every run (a piece beside decoding slots too)
+@@ -18873,7 +19153,7 @@ int main(int argc, char** argv) {
+                 if (to <= at) continue;
+                 err.clear();
+                 const bool win = windows_ok(at, to);
+-                if (win && !refill(err)) {
++                if (win && !refill(err, true)) {   // [claude] E751: the windows may run with the loan's experts still landing (on the CPU, as the batched path's interleaved windows do); a later batched part lends again only after they land
+                     std::printf("ERR refilling a lent slot failed: %s\n", err.c_str());
+                     return 1;
+                 }
+@@ -18943,7 +19223,7 @@ int main(int argc, char** argv) {
+                     std::fprintf(stderr, "strata serve: message boundary checkpoint: %lld tokens, %lld tail\n",
+                                  (long long) message_at, (long long) (turn_at - message_at));
+             }
+-            if (!refill(err)) {
++            if (!refill(err, true)) {   // [claude] E751: STRATA_REFILL_ASYNC may leave it in flight
+                 std::printf("ERR refilling a lent slot failed: %s\n", err.c_str());
+                 return 1;
+             }
+@@ -19661,6 +19941,7 @@ int main(int argc, char** argv) {
+                     }
+                     // --adapt-async: the verdict's tick, once the drafter's chain is launched (off its critical path)
+                     if (!last && ajob && !adapt_tick(false)) return die("an adaptive refill failed");
++                    for (int st = 0; st < n_stages; ++st) refill_async_poll(false, true, stage_ver_p(st, 0).device());   // [claude] E751e
+                     if (last) ending = true;
+                 }
+                 pl_drain();   // nothing in flight: both stages' commits and the drafter have landed
+@@ -19672,6 +19953,7 @@ int main(int argc, char** argv) {
+                 // unfenced (the INVARIANT at pl_drain: a checkpoint, a park, the serial loop and the next request find
+                 // nothing pipelined in flight) at the next tick, the next request's drain
+                 a_pl_settle();
++                refill_async_poll(false);   // [claude] E751e: nothing in flight - the deferred table upload, and the next batches
+                 for (cudaEvent_t ev : fence_ev) if (ev) cudaEventDestroy(ev);
+                 for (cudaEvent_t ev : exch_ev) if (ev) cudaEventDestroy(ev);
+                 if (pl_trace_path != nullptr && !pl_trace.empty()) {
+@@ -19881,6 +20163,7 @@ int main(int argc, char** argv) {
+                 // #463: the previous adapt round's copies land first - with a non-blocking query, whether a swapped-in
+                 // expert ran on the GPU or the CPU (they round differently) depended on the copy's timing
+                 // (STRATA_ADAPT_NOWAIT=1: 0.1.37's non-blocking query, the A/B)
++                refill_async_poll(false);   // [claude] E751e: a window gap - publish what landed, queue the next refill batches
+                 const Clock::time_point taw0 = Clock::now();
+                 const bool asw_skip = first_window || merged;   // the session's tier choice counts steady decode windows only
+                 double asw_wait_ms = 0;
+diff --git a/tests/program/vram_calib_test.cpp b/tests/program/vram_calib_test.cpp
+new file mode 100644
+index 000000000..bad7bb8b8
+--- /dev/null
++++ b/tests/program/vram_calib_test.cpp
+@@ -0,0 +1,83 @@
++// tests/program/vram_calib_test.cpp - STRATA_VRAM_CALIB (#5571): the measured reserve's host arithmetic (no GPU).
++#include "strata/program/vram_calib.hpp"
++
++#include <cstdio>
++#include <string>
++#include <vector>
++
++using namespace strata::program::vram_calib;
++
++namespace {
++int g_fail = 0;
++void check(bool ok, const std::string& what) {
++    if (ok) return;
++    std::fprintf(stderr, "FAIL: %s\n", what.c_str());
++    ++g_fail;
++}
++constexpr long long MiB = 1ll << 20;
++}  // namespace
++
++int main() {
++    // the key: stable, and it changes with the binary, any argument or any sizing variable, but not with the calibration's own
++    const std::vector<std::string> args = {"--serve", "--prefill", "16384"};
++    const std::vector<std::string> env = {"STRATA_A=1", "STRATA_B=2"};
++    const std::string k = file_key("123:456", args, env);
++    check(k.size() == 16, "the key is 16 hex digits");
++    check(k == file_key("123:456", args, env), "the key is stable");
++    check(k != file_key("123:457", args, env), "a rebuilt binary measures again");
++    check(k != file_key("123:456", {"--serve", "--prefill", "8192"}, env), "another argument measures again");
++    check(k != file_key("123:456", args, {"STRATA_A=1", "STRATA_B=3"}), "another variable measures again");
++    check(file_key("x", {"ab", "c"}, {}) != file_key("x", {"a", "bc"}, {}), "arguments are separated");
++
++    char e0[] = "STRATA_B=2", e1[] = "PATH=/bin", e2[] = "STRATA_A=1", e3[] = "STRATA_VRAM_CALIB=1", e4[] = "STRATA_VRAM_CALIB_MARGIN_MIB=256";
++    char* envp[] = {e0, e1, e2, e3, e4, nullptr};
++    const std::vector<std::string> se = sizing_env(envp);
++    check(se == env, "sizing_env keeps the STRATA_* variables, sorted, without PATH or the calibration's own switches");
++
++    // the file round-trips
++    const std::vector<Card> cards = {{0, 361 * MiB, 104 * MiB}, {1, 556 * MiB, 131 * MiB}};
++    const std::vector<Card> back = parse(format(cards));
++    check(back.size() == 2 && back[0].dev == 0 && back[0].need == 361 * MiB && back[0].grow == 104 * MiB &&
++          back[1].dev == 1 && back[1].need == 556 * MiB && back[1].grow == 131 * MiB, "format/parse round-trip");
++    check(parse("").empty() && parse("garbage").empty(), "an empty or broken file is no calibration");
++
++    // the reserve: need + grow rounded up to a MiB, plus the margin; the numbers measured on two RX 6900 XT (#5571)
++    check(reserve_mib(cards, 0, kDefaultMarginMib) == 361 + 104 + 192, "card 0: 361 + 104 + 192");
++    check(reserve_mib(cards, 1, kDefaultMarginMib) == 556 + 131 + 192, "card 1: 556 + 131 + 192");
++    check(reserve_mib(cards, 2, kDefaultMarginMib) == -1, "a card without a measurement keeps the old sizing");
++    check(reserve_mib({{0, MiB + 1, 0}}, 0, 0) == 2, "rounded up, not down");
++    check(reserve_mib({{0, -1, 0}}, 0, 192) == -1, "an unmeasured need is no calibration");
++    check(reserve_mib({{0, 10 * MiB, -5}}, 0, 0) == 10, "a negative growth counts as none");
++
++    // need: free when the cache was sized - free now - the cache, never negative, unknown without both figures
++    check(need_bytes(14000 * MiB, 500 * MiB, 13000 * MiB) == 500 * MiB, "need = mark - now - cache");
++    check(need_bytes(1000 * MiB, 900 * MiB, 200 * MiB) == 0, "need never negative");
++    check(need_bytes(-1, 500, 0) == -1 && need_bytes(500, -1, 0) == -1, "need unknown without both figures");
++
++    // growth: the lowest free figure after any request, and it never shrinks
++    long long grow = 0, low = 500 * MiB;
++    check(update_grow(grow, 500 * MiB, low, 450 * MiB) && grow == 50 * MiB, "a request that lowers free grows it");
++    check(!update_grow(grow, 500 * MiB, low, 480 * MiB) && grow == 50 * MiB, "a higher free figure later changes nothing");
++    check(!update_grow(grow, 500 * MiB, low, -1) && grow == 50 * MiB, "a failed reading changes nothing");
++    long long kept = 80 * MiB, low2 = 500 * MiB;
++    check(!update_grow(kept, 500 * MiB, low2, 450 * MiB) && kept == 80 * MiB, "a growth kept from the file is not lowered");
++
++    // [claude] E771: a measured need far below the calibration is not taken; a rise always is; none and tiny is not written
++    check(judge_need(0, 465 * MiB) == NeedVerdict::KeepPrev, "E769 OFF_5: card 1 measured 0 against 465 MiB - kept");
++    check(judge_need(-300 * MiB, 465 * MiB) == NeedVerdict::KeepPrev, "a negative reading against a calibration - kept");
++    check(judge_need(440 * MiB, 465 * MiB) == NeedVerdict::Take, "a small fall is taken");
++    check(judge_need(200 * MiB, 465 * MiB) == NeedVerdict::KeepPrev, "a fall by more than half and 64 MiB - kept");
++    check(judge_need(40 * MiB, 100 * MiB) == NeedVerdict::Take, "more than half but under 64 MiB - taken");
++    check(judge_need(900 * MiB, 465 * MiB) == NeedVerdict::Take, "a rise is always taken");
++    check(judge_need(0, -1) == NeedVerdict::Skip && judge_need(31 * MiB, -1) == NeedVerdict::Skip, "no calibration, under 32 MiB - skipped");
++    check(judge_need(351 * MiB, -1) == NeedVerdict::Take, "no calibration, a real figure - taken");
++
++    // the margin: a number or a tier, anything else the default
++    check(margin_mib(nullptr) == 192 && margin_mib("") == 192, "unset or empty: the default 192");
++    check(margin_mib("tight") == 96 && margin_mib("normal") == 192 && margin_mib("safe") == 384, "the three tiers");
++    check(margin_mib("256") == 256 && margin_mib("0") == 0, "a number of MiB");
++    check(margin_mib("-5") == 192 && margin_mib("12x") == 192 && margin_mib("huge") == 192, "a bad value falls back to the default");
++
++    if (g_fail == 0) std::printf("vram_calib_test: all checks passed\n");
++    return g_fail == 0 ? 0 : 1;
++}
+diff --git a/include/strata/program/vram_ledger.hpp b/include/strata/program/vram_ledger.hpp
+new file mode 100644
+index 000000000..1a20c359d
+--- /dev/null
++++ b/include/strata/program/vram_ledger.hpp
+@@ -0,0 +1,214 @@
++// include/strata/program/vram_ledger.hpp - scheduler step 2b: one card's expert-cache lending ledger (no GPU).
++//
++// Every user of a card's expert cache other than the experts themselves declares what it needs - a FIXED address (baked
++// into captured graphs), a RELOCATABLE one (laid out again at each use) or EXTERNAL room (VRAM given back to the driver
++// for another program) - and the ledger decides WHERE, by the three rules the engine already follows (see
++// notes/调度器第2步-借还接口盘点.md):
++//   - fixed regions stack from the head, in the order they are reserved at start; the head never moves, so neither do they;
++//   - relocatable loans take the tail of the slots usable now (`live`); several may be out at once (two batch slots
++//     reading prompts, a prompt loan beside a K/V growth, a small 8-12 GB card where everyone squeezes): each takes the
++//     first gap from the tail that holds it, so the first loan is exactly today's, and a gap a released loan leaves is
++//     reused; a sub-loan is carved inside its parent;
++//   - external room comes off the end (shrink), only while no loan is out past the new end.
++// The ledger only computes slot ranges and checks those rules; evicting, laying out and refilling stay where they are.
++// The tail arithmetic is split_lend_slots (split_ring.hpp), the same function the prompt path's loan uses today, so a
++// borrower moved onto the ledger gets exactly the slots it gets now.
++#pragma once
++
++#include "strata/program/split_ring.hpp"
++
++#include <algorithm>
++#include <cstdint>
++#include <string>
++#include <vector>
++
++namespace strata::program::vram_ledger {
++
++enum class Addr { Fixed, Relocatable, External };
++
++struct Lease {
++    int id = -1;
++    std::string name;
++    Addr addr = Addr::Relocatable;
++    int parent = -1;          ///< a sub-loan: the lease it is carved from
++    int64_t lo = 0, hi = 0;   ///< slot range [lo, hi)
++    uint64_t bytes = 0;       ///< what was asked
++    bool active = false;
++};
++
++class Card {
++public:
++    /// `offsets`: the cache's per-slot byte-offset prefix sum (slots + 1 entries) or empty for uniform `max_blob` slots.
++    Card(int64_t slots, std::vector<uint64_t> offsets, uint64_t max_blob)
++        : full_(slots), live_(slots), off_(std::move(offsets)), max_blob_(max_blob) {}
++
++    int64_t full() const { return full_; }
++    int64_t live() const { return live_; }
++    /// The end of the fixed head regions (the first slot a loan may never go below).
++    int64_t head_end() const { return head_end_; }
++    const std::vector<Lease>& leases() const { return leases_; }
++
++    /// The bytes of slots [0, n) (n clamped to the full cache).
++    uint64_t bytes_of(int64_t n) const {
++        if (n <= 0) return 0;
++        if (n > full_) n = full_;
++        return off_.empty() ? (uint64_t) n * max_blob_ : off_[(size_t) n];
++    }
++    /// Slots [0, k) whose bytes cover `need` (the smallest such k), or -1 when the whole cache does not.
++    int64_t head_slots_for(uint64_t need) const {
++        for (int64_t k = 0; k <= full_; ++k)
++            if (bytes_of(k) >= need) return k;
++        return -1;
++    }
++
++    /// A FIXED region at the head, stacked after the ones before it.  Only at start (before any loan or shrink): its
++    /// address is baked into graphs.  `budget_slots`: the most slots the head regions may take together.  -1: refused.
++    int reserve_head(const std::string& name, uint64_t bytes, int64_t budget_slots) {
++        if (any_active(Addr::Relocatable) || live_ != full_) return -1;
++        const int64_t lo = head_end_;
++        int64_t hi = lo;
++        while (hi < full_ && bytes_of(hi) - bytes_of(lo) < bytes) ++hi;
++        if (bytes_of(hi) - bytes_of(lo) < bytes || hi > budget_slots) return -1;
++        head_end_ = hi;
++        const int id = add(name, Addr::Fixed, -1, lo, hi, bytes);
++        leases_.back().active = false;   // placed, not occupied: experts use it until `occupy` (the slot sessions' way)
++        return id;
++    }
++    /// A fixed region in use (its experts evicted) / free again (experts may refill it).  The loan keeps clear of the
++    /// head regions either way: their place is fixed.
++    bool occupy(int id) { return set_fixed(id, true); }
++    bool vacate(int id) { return set_fixed(id, false); }
++
++    /// A RELOCATABLE loan: the first gap from the tail of `live` that holds `bytes`, taken from the gap's high end (the
++    /// tail slots whose bytes cover it; with no other loan out that is split_lend_slots over `live`, today's loan).
++    /// Refused (-1) when no gap holds it without reaching into the head regions, or when the loans together would
++    /// leave the experts fewer than `keep_min` slots past the head regions.  `available` says how much would fit.
++    int lend_tail(const std::string& name, uint64_t bytes, int64_t keep_min) {
++        if (bytes == 0) return -1;
++        const int64_t keep = keep_min > 0 ? keep_min : 0;
++        for (const auto& [glo, ghi] : gaps()) {
++            const int64_t lo = take_from_top(glo, ghi, bytes);
++            if (lo < 0) continue;
++            if (loaned_slots() + (ghi - lo) > live_ - head_end_ - keep) return -1;   // the experts' floor
++            return add(name, Addr::Relocatable, -1, lo, ghi, bytes);
++        }
++        return -1;
++    }
++    /// The most bytes one more loan could get now (the largest gap, within the experts' floor) - for a caller that can
++    /// take less (a smaller prompt chunk on a short card) instead of being refused.
++    uint64_t available(int64_t keep_min) const {
++        const int64_t keep = keep_min > 0 ? keep_min : 0;
++        const int64_t room = live_ - head_end_ - keep - loaned_slots();
++        if (room <= 0) return 0;
++        uint64_t best = 0;
++        for (const auto& [glo, ghi] : gaps()) {
++            const int64_t lo = ghi - room > glo ? ghi - room : glo;
++            const uint64_t b = bytes_of(ghi) - bytes_of(lo);
++            if (b > best) best = b;
++        }
++        return best;
++    }
++
++    /// A sub-loan inside an active relocatable loan, from its low end, after the sub-loans already in it.  -1: no room.
++    int sub(int parent, const std::string& name, uint64_t bytes) {
++        const Lease* p = find(parent);
++        if (p == nullptr || !p->active || p->addr != Addr::Relocatable || p->parent >= 0) return -1;
++        int64_t lo = p->lo;
++        for (const Lease& l : leases_)
++            if (l.active && l.parent == parent && l.hi > lo) lo = l.hi;
++        int64_t hi = lo;
++        while (hi < p->hi && bytes_of(hi) - bytes_of(lo) < bytes) ++hi;
++        if (bytes_of(hi) - bytes_of(lo) < bytes) return -1;
++        return add(name, Addr::Relocatable, parent, lo, hi, bytes);
++    }
++
++    /// EXTERNAL room: keep `keep_slots` usable and give the rest back.  Refused while a loan is out (the engine only
++    /// shrinks between requests) or below the head regions.  Growing back (a larger `keep_slots`) is always allowed up to
++    /// the full cache.
++    bool shrink_to(int64_t keep_slots) {
++        if (keep_slots > full_) keep_slots = full_;
++        if (keep_slots < live_ && (any_active(Addr::Relocatable) || keep_slots < head_end_)) return false;
++        live_ = keep_slots;
++        return true;
++    }
++
++    /// Give a lease back (and the sub-loans inside it).
++    void release(int id) {
++        for (Lease& l : leases_)
++            if (l.id == id || l.parent == id) l.active = false;
++    }
++
++    /// The slots experts may use now: [0, live) minus the occupied head regions and the active loan.
++    int64_t expert_slots() const {
++        int64_t n = live_;
++        for (const Lease& l : leases_)
++            if (l.active && l.parent < 0 && l.addr != Addr::External) n -= l.hi - l.lo;
++        return n;
++    }
++
++private:
++    /// Slots held by the top-level relocatable loans.
++    int64_t loaned_slots() const {
++        int64_t n = 0;
++        for (const Lease& l : leases_)
++            if (l.active && l.addr == Addr::Relocatable && l.parent < 0) n += l.hi - l.lo;
++        return n;
++    }
++    /// The free stretches of [head_end, live) between the top-level loans, from the tail down.
++    std::vector<std::pair<int64_t, int64_t>> gaps() const {
++        std::vector<std::pair<int64_t, int64_t>> busy;
++        for (const Lease& l : leases_)
++            if (l.active && l.addr == Addr::Relocatable && l.parent < 0) busy.emplace_back(l.lo, l.hi);
++        std::sort(busy.begin(), busy.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
++        std::vector<std::pair<int64_t, int64_t>> out;
++        int64_t top = live_;
++        for (const auto& [lo, hi] : busy) {
++            if (hi < top) out.emplace_back(hi, top);
++            if (lo < top) top = lo;
++        }
++        if (head_end_ < top) out.emplace_back(head_end_, top);
++        return out;
++    }
++    /// The lowest slot of a run ending at `hi` (inside [glo, hi)) whose bytes cover `need`, or -1.
++    int64_t take_from_top(int64_t glo, int64_t hi, uint64_t need) const {
++        int64_t lo = hi;
++        while (lo > glo && bytes_of(hi) - bytes_of(lo) < need) --lo;
++        return bytes_of(hi) - bytes_of(lo) >= need ? lo : -1;
++    }
++    bool any_active(Addr a) const {
++        for (const Lease& l : leases_)
++            if (l.active && l.addr == a && l.parent < 0) return true;
++        return false;
++    }
++    bool set_fixed(int id, bool on) {
++        for (Lease& l : leases_)
++            if (l.id == id && l.addr == Addr::Fixed) { l.active = on; return true; }
++        return false;
++    }
++    const Lease* find(int id) const {
++        for (const Lease& l : leases_)
++            if (l.id == id) return &l;
++        return nullptr;
++    }
++    int add(const std::string& name, Addr a, int parent, int64_t lo, int64_t hi, uint64_t bytes) {
++        Lease l;
++        l.id = next_id_++;
++        l.name = name;
++        l.addr = a;
++        l.parent = parent;
++        l.lo = lo;
++        l.hi = hi;
++        l.bytes = bytes;
++        l.active = true;
++        leases_.push_back(l);
++        return l.id;
++    }
++
++    int64_t full_ = 0, live_ = 0, head_end_ = 0;
++    std::vector<uint64_t> off_;
++    uint64_t max_blob_ = 0;
++    std::vector<Lease> leases_;
++    int next_id_ = 0;
++};
++
++}  // namespace strata::program::vram_ledger
+diff --git a/src/kernels/fetch_rebase_parity.cpp b/src/kernels/fetch_rebase_parity.cpp
+new file mode 100644
+index 000000000..76ba833f2
+--- /dev/null
++++ b/src/kernels/fetch_rebase_parity.cpp
+@@ -0,0 +1,79 @@
++// src/kernels/fetch_rebase_parity.cpp - [claude] E763 B5 STRATA_FETCH_REBASE: fetch_blobs_rebase against fetch_blobs then
++// rebase_ptrs, for 0..cap staged blobs from mapped host memory: the staged bytes (memcmp) and the pointers the PCIe share's
++// kernels read afterwards (the rebased src array for the two launches, `out` for the fused one) must be the same.
++#include "strata/kernels/verify_kernels.hpp"
++
++#include <cuda_runtime.h>
++
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <random>
++#include <vector>
++
++namespace {
++void ck(cudaError_t e, const char* w) {
++    if (e != cudaSuccess) { std::fprintf(stderr, "%s: %s\n", w, cudaGetErrorString(e)); std::exit(1); }
++}
++}  // namespace
++
++int main() {
++    constexpr int CAP = 16;
++    constexpr int64_t BLOB = 1948 * 1024;   // a 16-byte multiple, about the IQ3_S slot
++    cudaStream_t st = nullptr;
++    ck(cudaStreamCreateWithFlags(&st, cudaStreamNonBlocking), "stream");
++    std::vector<void*> host(CAP);
++    std::mt19937 rng(5);
++    for (int k = 0; k < CAP; ++k) {
++        ck(cudaHostAlloc(&host[k], BLOB, cudaHostAllocMapped), "hostalloc");
++        auto* b = (uint32_t*) host[k];
++        for (int64_t i = 0; i < BLOB / 4; ++i) b[i] = rng();
++    }
++    std::vector<unsigned long long> srcp(CAP);
++    for (int k = 0; k < CAP; ++k) { void* d = nullptr; ck(cudaHostGetDevicePointer(&d, host[k], 0), "devptr"); srcp[k] = (unsigned long long) d; }
++    unsigned long long *d_src_a = nullptr, *d_src_b = nullptr, *d_out = nullptr;
++    int32_t* d_n = nullptr;
++    uint8_t *d_dst_a = nullptr, *d_dst_b = nullptr;
++    ck(cudaMalloc(&d_src_a, CAP * 8), "m"); ck(cudaMalloc(&d_src_b, CAP * 8), "m"); ck(cudaMalloc(&d_out, CAP * 8), "m");
++    ck(cudaMalloc(&d_n, 4), "m"); ck(cudaMalloc(&d_dst_a, CAP * BLOB), "m"); ck(cudaMalloc(&d_dst_b, CAP * BLOB), "m");
++    int fails = 0;
++    for (int n = 0; n <= CAP; ++n) {
++        ck(cudaMemcpy(d_src_a, srcp.data(), CAP * 8, cudaMemcpyHostToDevice), "h2d");
++        ck(cudaMemcpy(d_src_b, srcp.data(), CAP * 8, cudaMemcpyHostToDevice), "h2d");
++        ck(cudaMemcpy(d_n, &n, 4, cudaMemcpyHostToDevice), "h2d");
++        ck(cudaMemset(d_dst_a, 0x11, CAP * BLOB), "ms"); ck(cudaMemset(d_dst_b, 0x22, CAP * BLOB), "ms"); ck(cudaMemset(d_out, 0, CAP * 8), "ms");
++        ck(cudaDeviceSynchronize(), "sync before");   // the memsets run on the legacy stream, the kernels on `st` (non-blocking)
++        strata::kernels::fetch_blobs(d_src_a, d_n, d_dst_a, BLOB, CAP, st);
++        strata::kernels::rebase_ptrs(d_src_a, d_n, d_dst_a, BLOB, st);
++        strata::kernels::fetch_blobs_rebase(d_src_b, d_n, d_dst_b, BLOB, CAP, d_out, st);
++        ck(cudaStreamSynchronize(st), "sync");
++        std::vector<uint8_t> a((size_t) n * BLOB), b((size_t) n * BLOB);
++        if (n > 0) {
++            ck(cudaMemcpy(a.data(), d_dst_a, a.size(), cudaMemcpyDeviceToHost), "d2h");
++            ck(cudaMemcpy(b.data(), d_dst_b, b.size(), cudaMemcpyDeviceToHost), "d2h");
++        }
++        std::vector<unsigned long long> pa(CAP), pb(CAP), sb(CAP);
++        ck(cudaMemcpy(pa.data(), d_src_a, CAP * 8, cudaMemcpyDeviceToHost), "d2h");
++        ck(cudaMemcpy(pb.data(), d_out, CAP * 8, cudaMemcpyDeviceToHost), "d2h");
++        ck(cudaMemcpy(sb.data(), d_src_b, CAP * 8, cudaMemcpyDeviceToHost), "d2h");
++        bool ok = std::memcmp(a.data(), b.data(), a.size()) == 0 && std::memcmp(b.data(), host.data() ? b.data() : b.data(), 0) == 0;
++        for (int k = 0; k < n; ++k) {
++            ok = ok && pa[k] - (unsigned long long) d_dst_a == pb[k] - (unsigned long long) d_dst_b;   // the same offsets
++            ok = ok && std::memcmp(b.data() + (size_t) k * BLOB, host[k], BLOB) == 0;              // the right bytes
++        }
++        ok = ok && std::memcmp(sb.data(), srcp.data(), CAP * 8) == 0;   // the fused launch leaves the source pointers alone
++        if (!ok) {
++            ++fails;
++            int bad_ref = 0, bad_new = 0, bad_ptr = 0;
++            for (int k = 0; k < n; ++k) {
++                bad_ref += std::memcmp(a.data() + (size_t) k * BLOB, host[k], BLOB) != 0;
++                bad_new += std::memcmp(b.data() + (size_t) k * BLOB, host[k], BLOB) != 0;
++                bad_ptr += pa[k] - (unsigned long long) d_dst_a != pb[k] - (unsigned long long) d_dst_b;
++            }
++            std::fprintf(stderr, "FAIL n=%d: two-launch blobs wrong %d, fused blobs wrong %d, pointer offsets differ %d, src kept %d\n",
++                         n, bad_ref, bad_new, bad_ptr, (int) (std::memcmp(sb.data(), srcp.data(), CAP * 8) == 0));
++        }
++    }
++    std::printf("fetch_rebase_parity: %d counts, %d failures\n", CAP + 1, fails);
++    return fails == 0 ? 0 : 1;
++}
+diff --git a/src/kernels/route_bell_parity.cpp b/src/kernels/route_bell_parity.cpp
+new file mode 100644
+index 000000000..58d9620aa
+--- /dev/null
++++ b/src/kernels/route_bell_parity.cpp
+@@ -0,0 +1,95 @@
++// src/kernels/route_bell_parity.cpp - [claude] E759 STRATA_ROUTE_BELL: the router with the doorbell folded in
++// (native_router_top10_multi_bell) against the two launches it replaces (native_router_top10_multi, then
++// doorbell_publish), for n = 1..8 tokens, on plain logits, on logits with exact ties and on logits with NaN.
++// Compared with memcmp: the device ids / weights, and the mapped (host) x / ids / weights the CPU pool reads; the
++// ring must have gone up by exactly one in each path.
++#include "strata/kernels/elementwise.hpp"
++#include "strata/kernels/native_router.hpp"
++
++#include <cuda_runtime.h>
++
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <random>
++#include <vector>
++
++namespace {
++void ck(cudaError_t e, const char* what) {
++    if (e != cudaSuccess) {
++        std::fprintf(stderr, "%s: %s\n", what, cudaGetErrorString(e));
++        std::exit(1);
++    }
++}
++constexpr int NE = 512, K = 10, N = 2560, MAXT = 8;
++
++struct Mapped {   // a host buffer the GPU writes through its mapped pointer, as the engine's doorbell rows
++    void* h = nullptr;
++    void* d = nullptr;
++    explicit Mapped(size_t bytes) {
++        ck(cudaHostAlloc(&h, bytes, cudaHostAllocMapped), "cudaHostAlloc");
++        ck(cudaHostGetDevicePointer(&d, h, 0), "cudaHostGetDevicePointer");
++        std::memset(h, 0, bytes);
++    }
++    ~Mapped() { cudaFreeHost(h); }
++};
++}  // namespace
++
++int main() {
++    cudaStream_t st = nullptr;
++    ck(cudaStreamCreateWithFlags(&st, cudaStreamNonBlocking), "stream");
++    float *d_logits = nullptr, *d_x = nullptr, *d_wa = nullptr, *d_wb = nullptr;
++    int32_t *d_ida = nullptr, *d_idb = nullptr;
++    ck(cudaMalloc(&d_logits, (size_t) MAXT * NE * 4), "malloc");
++    ck(cudaMalloc(&d_x, (size_t) MAXT * N * 4), "malloc");
++    ck(cudaMalloc(&d_wa, MAXT * K * 4), "malloc");
++    ck(cudaMalloc(&d_wb, MAXT * K * 4), "malloc");
++    ck(cudaMalloc(&d_ida, MAXT * K * 4), "malloc");
++    ck(cudaMalloc(&d_idb, MAXT * K * 4), "malloc");
++    Mapped xa((size_t) MAXT * N * 4), xb((size_t) MAXT * N * 4), ia(MAXT * K * 4), ib(MAXT * K * 4), wa(MAXT * K * 4),
++        wb(MAXT * K * 4), sa(64), sb(64);
++    std::mt19937 rng(11);
++    std::normal_distribution<float> nd(0.0f, 2.0f);
++    int fails = 0, cases = 0;
++    for (int kind = 0; kind < 3; ++kind) {
++        for (int n = 1; n <= MAXT; ++n) {
++            for (int rep = 0; rep < 4; ++rep) {
++                std::vector<float> lg((size_t) n * NE), x((size_t) n * N);
++                for (auto& v : lg) v = nd(rng);
++                if (kind == 1)   // exact ties: the smallest index must win in both paths
++                    for (int t = 0; t < n; ++t)
++                        for (int e = 0; e < NE; e += 7) lg[(size_t) t * NE + e] = 3.0f;
++                if (kind == 2)
++                    for (int t = 0; t < n; ++t) lg[(size_t) t * NE + (t * 37) % NE] = NAN;
++                for (auto& v : x) v = nd(rng);
++                ck(cudaMemcpy(d_logits, lg.data(), lg.size() * 4, cudaMemcpyHostToDevice), "h2d");
++                ck(cudaMemcpy(d_x, x.data(), x.size() * 4, cudaMemcpyHostToDevice), "h2d");
++                const uint32_t sa0 = *(volatile uint32_t*) sa.h, sb0 = *(volatile uint32_t*) sb.h;
++                strata::kernels::native_router_top10_multi(d_logits, d_ida, d_wa, n, st);
++                strata::kernels::doorbell_publish(d_x, d_ida, d_wa, (int64_t) n * N, (int64_t) n * K, (float*) xa.d,
++                                                  (int32_t*) ia.d, (float*) wa.d, (uint32_t*) sa.d, st);
++                strata::kernels::native_router_top10_multi_bell(d_logits, d_idb, d_wb, n, d_x, (int64_t) n * N, (float*) xb.d,
++                                                                (int32_t*) ib.d, (float*) wb.d, (uint32_t*) sb.d, st);
++                ck(cudaStreamSynchronize(st), "sync");
++                std::vector<int32_t> ha(n * K), hb(n * K);
++                std::vector<float> fa(n * K), fb(n * K);
++                ck(cudaMemcpy(ha.data(), d_ida, n * K * 4, cudaMemcpyDeviceToHost), "d2h");
++                ck(cudaMemcpy(hb.data(), d_idb, n * K * 4, cudaMemcpyDeviceToHost), "d2h");
++                ck(cudaMemcpy(fa.data(), d_wa, n * K * 4, cudaMemcpyDeviceToHost), "d2h");
++                ck(cudaMemcpy(fb.data(), d_wb, n * K * 4, cudaMemcpyDeviceToHost), "d2h");
++                ++cases;
++                bool ok = std::memcmp(ha.data(), hb.data(), n * K * 4) == 0 && std::memcmp(fa.data(), fb.data(), n * K * 4) == 0 &&
++                          std::memcmp(xa.h, xb.h, (size_t) n * N * 4) == 0 && std::memcmp(ia.h, ib.h, n * K * 4) == 0 &&
++                          std::memcmp(wa.h, wb.h, n * K * 4) == 0 && std::memcmp(xb.h, x.data(), (size_t) n * N * 4) == 0 &&
++                          *(volatile uint32_t*) sa.h == sa0 + 1 && *(volatile uint32_t*) sb.h == sb0 + 1;
++                if (!ok) {
++                    ++fails;
++                    std::fprintf(stderr, "FAIL kind %d n %d rep %d\n", kind, n, rep);
++                }
++            }
++        }
++    }
++    std::printf("route_bell_parity: %d cases, %d failures\n", cases, fails);
++    return fails == 0 ? 0 : 1;
++}
+diff --git a/tests/program/vram_ledger_test.cpp b/tests/program/vram_ledger_test.cpp
+new file mode 100644
+index 000000000..a77c77e10
+--- /dev/null
++++ b/tests/program/vram_ledger_test.cpp
+@@ -0,0 +1,144 @@
++// tests/program/vram_ledger_test.cpp - scheduler step 2b: the per-card lending ledger (no GPU).
++#include "strata/program/vram_ledger.hpp"
++
++#include <cstdio>
++#include <random>
++#include <string>
++#include <vector>
++
++using namespace strata::program;
++using namespace strata::program::vram_ledger;
++
++namespace {
++int g_fail = 0;
++void check(bool ok, const std::string& what) {
++    if (ok) return;
++    std::fprintf(stderr, "FAIL: %s\n", what.c_str());
++    ++g_fail;
++}
++constexpr uint64_t MiB = 1ull << 20;
++const Lease& lease(const Card& c, int id) { return c.leases()[(size_t) id]; }
++}  // namespace
++
++int main() {
++    // 1. the tail loan is exactly the prompt path's loan today: split_lend_slots, uniform slots
++    {
++        const uint64_t blob = 1948 * 1024;   // ~1.86 MiB, the IQ3_S slot on this box
++        Card c(7025, {}, blob);
++        const uint64_t need = 900 * MiB;
++        const int id = c.lend_tail("prompt", need, 128);
++        const int64_t n = split_lend_slots(7025, (int64_t) (7025 * blob), nullptr, blob, need);
++        check(id >= 0 && lease(c, id).lo == 7025 - n && lease(c, id).hi == 7025, "uniform: the loan = split_lend_slots' tail");
++        check(c.expert_slots() == 7025 - n, "uniform: experts keep the rest");
++    }
++    // 2. ...and with per-slot sizes (a native pack), against random layouts
++    {
++        std::mt19937 rng(7);
++        for (int t = 0; t < 50; ++t) {
++            const int64_t slots = 500 + (int64_t) (rng() % 3000);
++            std::vector<uint64_t> off(1, 0);
++            for (int64_t i = 0; i < slots; ++i) off.push_back(off.back() + (1 + rng() % 4) * MiB);
++            Card c(slots, off, 0);
++            const uint64_t need = (uint64_t) (rng() % (off.back() / 2)) + 1;
++            const int64_t n = split_lend_slots(slots, (int64_t) off.back(), off.data(), 0, need);
++            const int id = c.lend_tail("prompt", need, 0);
++            if (slots - n < 0 || n == 0) continue;
++            check(id >= 0 && lease(c, id).lo == slots - n, "sized: the loan = split_lend_slots' tail (" + std::to_string(t) + ")");
++            check(c.bytes_of(slots) - c.bytes_of(lease(c, id).lo) >= need, "sized: the loan covers what was asked");
++        }
++    }
++    // 3. fixed regions stack from the head, only at start, within a budget
++    {
++        Card c(1000, {}, 2 * MiB);
++        const int a = c.reserve_head("slot sessions", 100 * MiB, 200);   // 50 slots
++        const int b = c.reserve_head("kv window", 60 * MiB, 200);        // 30 slots after it
++        check(a >= 0 && lease(c, a).lo == 0 && lease(c, a).hi == 50, "head 1 at [0, 50)");
++        check(b >= 0 && lease(c, b).lo == 50 && lease(c, b).hi == 80 && c.head_end() == 80, "head 2 stacked at [50, 80)");
++        check(c.reserve_head("too much", 300 * MiB, 200) < 0, "over the head budget: refused");
++        check(c.expert_slots() == 1000, "placed but not occupied: experts still use the head regions");
++        c.occupy(a);
++        check(c.expert_slots() == 950, "occupied: its slots leave the experts");
++        c.vacate(a);
++        check(c.expert_slots() == 1000, "vacated: back to the experts");
++        const int l = c.lend_tail("prompt", 10 * MiB, 0);
++        check(l >= 0 && c.reserve_head("late", 2 * MiB, 200) < 0, "no new fixed region once a loan is out");
++        c.release(l);
++        check(c.shrink_to(900) && c.reserve_head("late", 2 * MiB, 200) < 0, "no new fixed region after a shrink");
++    }
++    // 4. the loan keeps clear of the head regions (occupied or not) and leaves keep_min slots for experts
++    {
++        Card c(300, {}, 1 * MiB);
++        c.reserve_head("slot sessions", 50 * MiB, 100);   // [0, 50): the loan may start at 50 + keep_min at the lowest
++        check(c.lend_tail("prompt", 122 * MiB, 128) >= 0, "a loan leaving exactly 128 slots past the head: granted");
++    }
++    {
++        Card c(300, {}, 1 * MiB);
++        c.reserve_head("slot sessions", 50 * MiB, 100);
++        check(c.lend_tail("prompt", 123 * MiB, 128) < 0, "a loan leaving 127 slots past the head: refused");
++        check(c.lend_tail("prompt", 251 * MiB, 0) < 0, "a loan into the head region: refused");
++    }
++    // 5. sub-loans stack inside a loan and go back with it
++    {
++        Card c(1000, {}, 1 * MiB);
++        const int p = c.lend_tail("prompt", 400 * MiB, 128);   // [600, 1000)
++        check(p >= 0, "the loan [600, 1000)");
++        const int s1 = c.sub(p, "dp stage ring", 76 * MiB);
++        const int s2 = c.sub(p, "dp foreign session", 512 * MiB);
++        const int s3 = c.sub(p, "dp foreign session", 300 * MiB);
++        check(s1 >= 0 && lease(c, s1).lo == 600 && lease(c, s1).hi == 676, "sub 1 at the loan's low end");
++        check(s2 < 0, "a sub-loan larger than what is left of the loan: refused");
++        check(s3 >= 0 && lease(c, s3).lo == 676 && lease(c, s3).hi == 976, "sub 2 stacked after sub 1");
++        check(c.expert_slots() == 600, "sub-loans do not count twice");
++        c.release(p);
++        check(!lease(c, s1).active && !lease(c, s3).active && c.expert_slots() == 1000, "releasing the loan releases its sub-loans");
++        check(c.lend_tail("again", 10 * MiB, 0) >= 0, "a new loan after the release");
++    }
++    // 6. external room: only between loans, never below the head; the next loan follows the shorter tail
++    {
++        Card c(1000, {}, 1 * MiB);
++        c.reserve_head("slot sessions", 50 * MiB, 100);
++        const int p = c.lend_tail("prompt", 100 * MiB, 128);
++        check(!c.shrink_to(800), "shrink while a loan is out: refused");
++        c.release(p);
++        check(c.shrink_to(800) && c.live() == 800, "shrink between requests (the picture reader's room)");
++        check(!c.shrink_to(40), "shrink into the head regions: refused");
++        const int q = c.lend_tail("prompt", 100 * MiB, 128);
++        check(q >= 0 && lease(c, q).hi == 800 && lease(c, q).lo == 700, "the next loan takes the tail of what is left");
++        c.release(q);
++        check(c.shrink_to(5000) && c.live() == 1000, "grow back, clamped to the full cache");
++    }
++
++    // 7. several loans at once: stacked down from the tail, a released one leaves a gap the next fitting loan reuses
++    {
++        Card c(1000, {}, 1 * MiB);
++        const int a = c.lend_tail("slot A prompt", 200 * MiB, 128);   // [800, 1000): today's loan exactly
++        const int b = c.lend_tail("slot B prompt", 150 * MiB, 128);   // [650, 800)
++        const int k = c.lend_tail("kv growth", 100 * MiB, 128);       // [550, 650)
++        check(lease(c, a).lo == 800 && lease(c, a).hi == 1000, "loan 1 at the tail");
++        check(lease(c, b).lo == 650 && lease(c, b).hi == 800, "loan 2 stacked below it");
++        check(lease(c, k).lo == 550 && lease(c, k).hi == 650, "loan 3 below that");
++        check(c.expert_slots() == 550, "three loans out: 450 slots lent");
++        c.release(b);                                                   // a gap [650, 800)
++        const int d = c.lend_tail("small", 100 * MiB, 128);
++        check(d >= 0 && lease(c, d).lo == 700 && lease(c, d).hi == 800, "the next loan that fits reuses the gap, from its top");
++        const int e = c.lend_tail("big", 300 * MiB, 128);               // the gap left [650, 700) is too small
++        check(e >= 0 && lease(c, e).hi == 550 && lease(c, e).lo == 250, "a loan the gap cannot hold goes below the others");
++        check(!c.shrink_to(900), "no shrink while loans are out");
++    }
++    // 8. a short card: the experts' floor holds across all loans, and `available` says what still fits
++    {
++        Card c(600, {}, 2 * MiB);                                       // ~1.2 GB of cache on an 8 GB card
++        c.reserve_head("slot sessions", 100 * MiB, 100);                // [0, 50)
++        const int a = c.lend_tail("prompt", 600 * MiB, 16);             // 300 slots: [300, 600)
++        check(a >= 0, "the first loan fits");
++        const uint64_t room = c.available(16);                          // 600 - 50 - 16 - 300 = 234 slots
++        check(room == 234 * 2 * MiB, "available: what is left above the floor, in bytes");
++        check(c.lend_tail("second", room + 1, 16) < 0, "a loan above what is available: refused");
++        check(c.lend_tail("second", room, 16) >= 0, "a loan of exactly what is available: granted");
++        check(c.available(16) == 0, "nothing left above the floor");
++        check(c.expert_slots() == 66, "experts keep the floor (16) plus the head region while it is not occupied (50)");
++    }
++
++    if (g_fail == 0) std::printf("vram_ledger_test: all checks passed\n");
++    return g_fail == 0 ? 0 : 1;
++}
