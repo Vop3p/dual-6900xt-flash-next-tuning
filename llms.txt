@@ -23,6 +23,7 @@ Start with AGENTS.md for how to reproduce and what not to retry. English docs ar
 - [data/linux-dp-0.2.10.csv](data/linux-dp-0.2.10.csv): layer pipeline vs on-demand DP prompt read on 0.2.10 (16K–128K prompt, 4K/32K decode).
 - [data/linux-steps-0.2.11.csv](data/linux-steps-0.2.11.csv): 11-06 steps 0.2.11 → MMQ activation reads → merged kernel batch, every run's value (long format).
 - [data/linux-foresight-e810-e819.csv](data/linux-foresight-e810-e819.csv): upstream Foresight swap space on two cards, every arm of E810–E819 with same-session baselines (window ms, GPU-reach wait, CPU experts and their cost; the filler thread on the host core vs moved).
+- [data/linux-one-card-e821-e822.csv](data/linux-one-card-e821-e822.csv): one card, 11-13: the 11-06 build vs today's (slots, prompt at five lengths, decode), and STRATA_MTP_ROOM_MIN on one card.
 - [data/windows-steps.csv](data/windows-steps.csv): Windows one-card standard-benchmark steps.
 - [data/linux-modes-0.1.41-32k.csv](data/linux-modes-0.1.41-32k.csv): one card vs expert helper vs layer split.
 - [data/timeline-steps.en.csv](data/timeline-steps.en.csv), [data/timeline-steps.zh.csv](data/timeline-steps.zh.csv): every timeline step (English / Chinese).

@@ -80,6 +80,10 @@ Six opt-in fusions cut the graph from 1,056 to 865 nodes per window (E765): the 
 
 Requests with pictures occasionally stalled for good (issue #267, also #4668). A reproducer stalled within 2–17 pictures, every time with "Runlist is getting oversubscribed" in the kernel log: engine plus picture encoder had more hardware queues on card 0 than the hardware scheduler has slots. `GPU_MAX_HW_QUEUES=1` for the encoder process only: 27 pictures in a row, 0 oversubscription, 0 stalls, OCR unchanged (E795); production config 12/12 and 128K 2,654 (E796). Earlier workarounds (`HSA_ENABLE_SDMA=0`, `--adapt-swaps 0`) worked only because they happened to lower the queue count. Upstream MEC / SDMA firmware 0x86 / 0x58 does not fix the stall under oversubscription (E797). The last link (a completion signal decremented twice when a queue is preempted) is inferred, not observed.
 
+### One card (11-13, E821–E822)
+
+0211fz with `STRATA_HC_I8ONLY=1`, `STRATA_VRAM_CALIB=1` and the six fusions on one card against the 11-06 build: slots 4,718 → 5,156, prompt flat (5.6K–128K within ±0.7%), decode 4K / 32K +6% / +8% (W F F W, two pairs; four runs of today's config over two sessions, 32K 56.4–60.1). Standard benchmark: 4K / 16K 1,083 / 1,484, decode 51.5 / 54.0, 21/21. Two cards read 128K 1.80–1.82× as fast as one. `STRATA_MTP_ROOM_MIN=8192` on one card: 16K −3%, longer ±0.6% (E822), closed. Its 32K decode (59.4–59.7) sits inside the spread of the same config without it (56.4–60.1 over two sessions), so no decode effect is claimed.
+
 ### Closed (11-12 – 11-13)
 
 - Engine `GPU_MAX_HW_QUEUES=5`: −4.1% per window, three pairs (E799); with 2 (E420) slower and with pictures deadlocked (E793). 4 stays.

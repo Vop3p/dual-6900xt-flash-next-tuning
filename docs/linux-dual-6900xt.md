@@ -42,6 +42,22 @@ Arguments, environment and build steps are in [`AGENTS.md`](../AGENTS.md) ("Repr
 - **VRAM is tight.** With `STRATA_VRAM_CALIB=1` each card keeps what it measured after its cache plus 192 MiB free (~300–380 MiB after loading). Anything that allocates VRAM the calibration did not see (an extra feature, a changed config) eats that margin; delete the calibration files after a change. On one 16 GB card, leave `STRATA_HC_PERSIST_Q8` off (its copies take 641 MiB, E706).
 - **Run the picture encoder with one hardware queue** (`GPU_MAX_HW_QUEUES=1` for `strata-vision` only). Engine plus encoder otherwise oversubscribe card 0's hardware queues and a request with pictures can stall for good (#267, E795/E796).
 
+## One card (2026-11-13, E821)
+
+The same build on **one** RX 6900 XT (the other card idle, `parallel 1`, 131,072 context, no pictures). Of the newer switches, three apply to one card: `STRATA_HC_I8ONLY=1` (the hc copies take half the VRAM; the draft head no longer misses the fit), `STRATA_VRAM_CALIB=1` (start once to write the calibration) and the six decode fusions. DP and lazy slots need two cards / two slots.
+
+| | 11-06 build (0211wl2) | today (0211fz + the three) |
+|---|---|---|
+| expert slots | 4,718 | 5,156 (+9%) |
+| prompt 5.6K / 16K / 31K / 62K / 128K | 1,301 / 1,488 / 1,479 / 1,461 / 1,461 | 1,308 / 1,485 / 1,469 / 1,461 / 1,457 |
+| decode 4K / 32K (`bench/benchmark.py`) | 51.5 / 53.9 | **54.6 / 58.4** (+6% / +8%) |
+
+Interleaved W F F W, two pairs in the same direction; today's decode is the mean of four runs over two sessions (32K 56.4–60.1: the same config moves ~5% between sessions); prompt is flat. Strata's standard benchmark on one card: prompt 4K / 16K **1,083 / 1,484**, decode short / 4K / 16K 52.8 / 51.5 / 54.0, 21/21 (11-06: 1,058 / 1,434, decode 49.8 / 48.6).
+
+**Two cards against one** (same corpus, same build): 128K prompt 2,628 / 1,461 = **1.80×** (0211wl2), 2,652 / 1,457 = 1.82× (0211fz). Short-prompt decode 94–108 against 52–60. Where the remaining ~10% of an ideal 2× goes during a DP read (copying the other card's dense rows, publishing state between the halves, a cache that mostly holds the card's own layers) is an estimate, not measured.
+
+Not worth it on one card either: lending the draft model's 512 experts to the prompt ring (`STRATA_MTP_ROOM_MIN=8192`, +265 ring slots): 16K −3% (the first loan of a process takes 325 ms), 31K–128K ±0.6% (E822). `--prefill-head-alias` does not apply: the automatic prompt chunk is already 8,192 on one card.
+
 ## What mattered
 
 Ranked by effect. Numbers are from same-session interleaved A/B runs at the time of each step.

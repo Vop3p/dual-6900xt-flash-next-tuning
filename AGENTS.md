@@ -88,7 +88,7 @@ Rollback build: `strata-0211vx-006a704b` (no `0004`, no fusion switches): +1.3% 
   a rocBLAS table made under Linux (refused), a VRAM reserve below ~1 GiB left free (pages, answers go wrong).
 - Closed 11-09 – 11-13: engine `GPU_MAX_HW_QUEUES=5` (−4.1% per window, E799; 4 is best, 2 deadlocks with pictures); the draft model on the first card
   (`STRATA_MTP_STAGE0=1`, −13.4%, E798); MEC/SDMA firmware 0x86/0x58 against the #267 stall (still stalls, E797); KV window 8192 (E747);
-  asynchronous refill after a prompt read (E751, PCIe is zero-sum); the CPU activation quantised like the GPU's (`STRATA_CPU_ACT_Q81`, no end-to-end gain, E735–E737).
+  asynchronous refill after a prompt read (E751, PCIe is zero-sum); lending the draft model's experts to the prompt ring (`STRATA_MTP_ROOM_MIN`: two cards E661i, one card E822, no gain); the CPU activation quantised like the GPU's (`STRATA_CPU_ACT_Q81`, no end-to-end gain, E735–E737).
 - Foresight swap space (`STRATA_FS_SLOTS`, upstream) - closed after E803–E820, see `docs/linux-history.md` (11-13). Two traps worth knowing even
   without FS: threads created after the host pins itself stay on the host's one CPU unless `STRATA_PIPED_CONCURRENT` is on (FS turns it off),
   and `STRATA_FS_VERIFY=1` deadlocks the pipelined decode.
