@@ -1,6 +1,4 @@
-# dual-6900xt-flash-next-tuning
-
-<img src="docs/cover-en.webp" alt="#1 AMD dual-card in the Strata community index: 2x RX 6900 XT, 2,041 tok/s at 128K, 82 tok/s decode" width="100%">
+# Two 2020 RX 6900 XT cards running Qwen3.8-Flash-Next: 2,652 tok/s prompt at 128K, 94–108 tok/s decode
 
 [中文](README.zh-CN.md) · [Interactive timeline](https://vop3p.github.io/dual-6900xt-flash-next-tuning/?lang=en) (English / 中文) · For AI assistants: [`llms.txt`](llms.txt), [`AGENTS.md`](AGENTS.md)
 

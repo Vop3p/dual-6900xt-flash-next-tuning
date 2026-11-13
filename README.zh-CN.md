@@ -1,6 +1,4 @@
-# dual-6900xt-flash-next-tuning（中文）
-
-<img src="docs/cover-zh.webp" alt="Strata 社区榜 AMD 双卡第一：2× RX 6900 XT，128K 2,041 tok/s，解码 82" width="100%">
+# 两张 2020 年的 RX 6900 XT 跑 Qwen3.8-Flash-Next：128K 读 prompt 2,652 tok/s，解码 94–108 tok/s
 
 [English](README.md) · [交互版时间线](https://vop3p.github.io/dual-6900xt-flash-next-tuning/?lang=zh)（中文 / English） · 给 AI 助手看的：[`llms.txt`](llms.txt)、[`AGENTS.md`](AGENTS.md)
 
