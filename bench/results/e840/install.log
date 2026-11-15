@@ -1,0 +1,56 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261114224137
+Username: IANLAB\<user>
+RunAs User: IANLAB\<user>
+Configuration Name: 
+Machine: IANLAB (Microsoft Windows NT 10.0.26300.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.EXE -NoProfile -ExecutionPolicy Bypass -File C:\strata\e840.ps1
+Process ID: 3144
+PSVersion: 5.1.26100.9818
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9818
+BuildVersion: 10.0.26100.9818
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+
+== 1/4  the Strata Terminal
+strata 0.2.3.1 (build 0.1.48.1; python 3.12.15 at C:\Users\<user>\AppData\Local\Strata\terminal\current\python\python.exe
+)
+
+== 2/4  the graphics card and the engine package
+Strata sees: AMD Radeon RX 6900 XT  (gfx1030)
+Engine package: 0.1.59 rdna2 (code for gfx1030, gfx1031)
+Strata update (https://github.com/Niko1221/Strata/releases/latest/download)
+  Reading the signed update feed
+Feed sequence 124, signed by 5d1bc23abbeffd0d
+Engine  0.1.59   up to date
+
+== 3/4  setting up the model and saving the preset 'rx6000-tuned'
+strata launch --model iq3_s --context 64k --vision cpu --tune skip --save-preset rx6000-tuned --yes --no-tui --set vram-reserve-mib=1536 --set kv-resident=32768 --set pcie-frac=0.2 --set prefill=8192 --set STRATA_HIP_PROMPT_F16=1 --set STRATA_PREFILL_COPY_EVENT_EVERY=16 --set STRATA_PREFILL_COPY_WAIT_DEDUPE=1 --set STRATA_PREFILL_CPU_SHARE=auto --set STRATA_PREFILL_CPU_SHARE_BATCH=1 --set STRATA_PREFILL_STREAM_MIN=2048 --set STRATA_HC_PERSIST=1 --set STRATA_PIPED_CONCURRENT=1 --set STRATA_PW_WITH_BATCH=1 --set STRATA_STAGE_TRIM=1 --set STRATA_GDN_HEAD=1 --set STRATA_GDN_PP=2 --set STRATA_GDN_CONVL2=1 --set STRATA_GDN_NOY=1 --set STRATA_DEQUANT_WIDE=1 --set STRATA_IQ_STAGE_TABLES=1 --set STRATA_PLE_COMPACT=1 --set STRATA_PLE_COPY_STREAM=1 --set STRATA_SLOT_COPY_DIRECT=1 --set STRATA_SLOT_COPY_BATCHSYNC=1 --set STRATA_SLOT_CKPT_MOVE=1 --set STRATA_KV_HOST_DMA=1 --set STRATA_ATTN_MERGE_V2=1 --set STRATA_FUSE_HITS=1 --set STRATA_GU_SWIGLU=1 --set STRATA_IO_THREADS=128 --set STRATA_HOST_CORE=sibling --model-path C:\strata\models\iq3_s
+
+Strata is serving.
+  This computer  http://127.0.0.1:8080/v1
+  Anthropic apps http://127.0.0.1:8080   (Claude Code: ANTHROPIC_BASE_URL, no /v1 at the end)
+  Watch it:    strata monitor --url http://127.0.0.1:8080
+  Connect an app:  strata connect opencode      Stop:  strata launch --stop --preset "rx6000-tuned"
+
+== 3b/4 the fast engine (strata-0211fz built for gfx1030 / gfx1031)
+Stopped rx6000-tuned.
+[!] Only 54 GB of RAM is free. Strata needs ~47 GB for the expert arena: close browsers, chat apps and game launchers,
+    or it reads experts from disk and runs several times slower.
+
+== 4/4  done
+The fast engine is starting in its own window (about a minute). It serves http://127.0.0.1:8080/v1
+Next time start it with:     C:\Users\<user>\AppData\Local\Strata\rx6000-fast\0211fz-win-gfx103x\start-fast.bat
+Stop it: close that window.
+Official engine instead:     strata launch --preset rx6000-tuned
+Before you judge the speed: put your monitor on the CPU's graphics (iGPU) if you have one, keep 55 GB of RAM free,
+and close games, browsers with video and the Radeon overlay (README.md).
+**********************
+Windows PowerShell transcript end
+End time: 20261114224339
+**********************

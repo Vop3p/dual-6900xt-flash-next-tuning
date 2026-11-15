@@ -8,18 +8,21 @@ this file is the short, actionable part. Numbers below are measurements from the
 - **Linux box:** 2x AMD RX 6900 XT 16 GB (gfx1030, PCIe 4.0 x8 each), Ryzen 5 5600X, 128 GB DDR4-3200, Ubuntu, ROCm 10.0,
   Strata (0.2.11 + patches + on-demand DP + MMQ activation reads + the 11-06 kernel batch, as of 2026-11-07). Model: Qwen3.8-Flash-Next GSQ-RCO IQ3_S (two GGUF shards + Strata pack).
 - **Windows PC:** one RX 6900 XT 16 GB, i9-10900K, 64 GB, Windows 11, Strata Terminal 0.2.3.1 with the official
-  `windows-x86_64-hip-rdna2` engine package 0.1.48.
+  `windows-x86_64-hip-rdna2` engine package 0.1.59 (release 0.2.13), and a local Windows build of `strata-0211fz`.
 - Other RDNA2 cards (6800 / 6800 XT / 6950 XT = gfx1030, 6700 XT = gfx1031) were **not measured**; expect the same
   mechanisms, not the same numbers. RDNA3/RDNA4 differ (WMMA, other packages).
 
 ## Reproduce: one RX 6000 card on Windows (easiest)
 
-Use `windows-rx6000/install-rx6000.ps1` (see its README). It only uses official Strata pieces and these settings:
-`vram-reserve-mib=1536`, `kv-resident=32768`, `pcie-frac=0.2`, `prefill=8192`, and the env switches
-`STRATA_HIP_PROMPT_F16=1 STRATA_HIP_ADAPT_KERNEL_COPY=1 STRATA_PREFILL_CPU_SHARE=auto STRATA_HC_PERSIST=1
-STRATA_PIPED_CONCURRENT=1 STRATA_PREFILL_STREAM_MIN=2048 STRATA_IO_THREADS=128 STRATA_HOST_CORE=sibling`. Expected with Strata's
-standard benchmark: prompt 4K / 16K ≈ 612 / 1,087 tok/s, decode ≈ 42, 12/12 sanity. Check first: the monitor on the iGPU,
-a fixed page file about the size of RAM, the model on local NVMe.
+Use `windows-rx6000/install-rx6000.ps1` (see its README). By default it installs a local build of the Linux production
+source (`strata-0211fz`, for gfx1030 and gfx1031) from this repository's releases, checked against a SHA-256, with 40
+switches (`$FastEnv` in the script), a rocBLAS table tuned on Windows, `--prefill 8192`, `--vram-reserve-mib 1536`,
+`--kv-resident 32768`. Expected with Strata's standard benchmark on an RX 6900 XT: prompt 4K / 16K ≈ 779 / 1,333 tok/s,
+decode ≈ 44–46, 12/12 sanity (E840; the released zip). `-Official` uses only the official package and 27 official switches: ≈ 809 / 1,157,
+decode ≈ 40–44 (E838). Under Windows do **not** set `STRATA_SIDE_MIXER` (−22% decode), `STRATA_SH_STREAM` (−17 to −19%),
+`STRATA_HIP_ADAPT_KERNEL_COPY` (−2.5%) or `STRATA_FUSE_WAIT` (−1%). Check first: ≥55 GB of RAM free before starting
+(else the expert arena pages and everything runs at half speed or less), the monitor on the iGPU, a fixed page file about
+the size of RAM, the model on local NVMe. The gfx1031 code and 12 GB cards were never run.
 
 ## Reproduce: two cards on Linux (the production configuration)
 
@@ -84,7 +87,7 @@ Rollback build: `strata-0211vx-006a704b` (no `0004`, no fusion switches): +1.3% 
   a second guess on the bonus token (E694b, +1.9 ms a row on card 0 eats the gain).
 - PCIe x16+x4 instead of x8/x8 for long prompts (long prompts wait on PCIe only 0.2–0.7% of the time).
 - GPU core / memory overclock (decode does not follow the clock, E507–E512); CPU and RAM speed (decode is GPU-bound: 6 → 4 CPU expert threads did not slow it, E524; not written up in docs/).
-- Windows: `STRATA_SH_STREAM` (slower, and stops the engine with KV streaming), large pages (error 1450 with 64 GB),
+- Windows: `STRATA_SH_STREAM` and `STRATA_SIDE_MIXER` (decode −17 to −22%; the KV-streaming fault of 0.1.48 no longer reproduces on 0.1.59), large pages (error 1450 with 64 GB),
   a rocBLAS table made under Linux (refused), a VRAM reserve below ~1 GiB left free (pages, answers go wrong).
 - Closed 11-09 – 11-13: engine `GPU_MAX_HW_QUEUES=5` (−4.1% per window, E799; 4 is best, 2 deadlocks with pictures); the draft model on the first card
   (`STRATA_MTP_STAGE0=1`, −13.4%, E798); MEC/SDMA firmware 0x86/0x58 against the #267 stall (still stalls, E797); KV window 8192 (E747);

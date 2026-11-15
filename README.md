@@ -14,7 +14,7 @@ Measured tuning of **Qwen3.8-Flash-Next (IQ3_S)** on AMD RX 6900 XT (RDNA2, gfx1
 | You have | Result | Read |
 |---|---|---|
 | **2x RX 6900 XT, Linux** (Ryzen 5 5600X, 128 GB, PCIe 4.0 x8 each) | Strata 0.2.11 + patches: prompt **1,234 / 2,124 / 2,301 / 2,636** tok/s at 4K / 16K / 31K / 256K, decode **81–86**; from llama.cpp: decode ≈3×, 32K prompt ≈8× | [docs/linux-dual-6900xt.md](docs/linux-dual-6900xt.md) (now) · [history](docs/linux-history.md) |
-| **One RX 6000 card, Windows** (6800 / 6800 XT / 6900 XT / 6950 XT / 6700 XT) | official package, settings only: 16K prompt **479 → 1,076** tok/s, decode **28 → 42**; one PowerShell script sets it up | [windows-rx6000/](windows-rx6000/README.md) (the lazy pack) · [docs/windows-one-card.md](docs/windows-one-card.md) (how it was found) |
+| **One RX 6000 card, Windows** (6800 / 6800 XT / 6900 XT / 6950 XT / 6700 XT) | one PowerShell script installs the fastest measured setup (a local build of the Linux production source): 16K prompt **479 → 1,333** tok/s, decode **28 → 44–46** (official package only: 1,157) | [windows-rx6000/](windows-rx6000/README.md) (the lazy pack) · [docs/windows-one-card.md](docs/windows-one-card.md) (how it was found) |
 | **The dense Qwen3.8-27B on llama.cpp**, two cards | prompt 731 tok/s at 32K, decode 62 short / 44 at 32K; eight RDNA2 llama.cpp patches | [docs/27b-llamacpp.md](docs/27b-llamacpp.md) · [patches/llama.cpp/](patches/llama.cpp/README.md) |
 
 ## More
@@ -24,8 +24,8 @@ Measured tuning of **Qwen3.8-Flash-Next (IQ3_S)** on AMD RX 6900 XT (RDNA2, gfx1
 - [data/](data/README.md) — the numbers behind every chart as CSV.
 - [bench/](bench/) — the A/B scripts (`run_ab.sh`, `benchmark.py`, `ab_compare.py`, `monitor_amd.py`) and raw results per experiment (`bench/results/eNNN/`).
 - Upstream, from these machines:
-  - benchmark reports: [#5454](https://github.com/Niko1221/Strata/pull/5454) (0.2.11 + patches), #4602 (0.2.7), [#4012](https://github.com/Niko1221/Strata/pull/4012) (Windows), [#3426](https://github.com/Niko1221/Strata/pull/3426) (0.2.0-beta), #1927, #1657;
-  - engine PRs: drafts [#5474](https://github.com/Niko1221/Strata/pull/5474), [#5475](https://github.com/Niko1221/Strata/pull/5475), [#5476](https://github.com/Niko1221/Strata/pull/5476) (the 11-06 kernel batch), [#5691](https://github.com/Niko1221/Strata/pull/5691) (VRAM calibration), [#5698](https://github.com/Niko1221/Strata/pull/5698) (encoder warm-up), [#5897](https://github.com/Niko1221/Strata/pull/5897) (picture encoder environment), #5146; merged or earlier #4006 (in 0.2.12), #4005, #3073, #3095, #3381, #3382;
+  - benchmark reports: [#5997](https://github.com/Niko1221/Strata/pull/5997) (two cards, one card, Windows; 2026-11-14), #5454 (0.2.11 + patches, superseded), #4602 (0.2.7), [#4012](https://github.com/Niko1221/Strata/pull/4012) (Windows), [#3426](https://github.com/Niko1221/Strata/pull/3426) (0.2.0-beta), #1927, #1657;
+  - engine PRs: [#5984](https://github.com/Niko1221/Strata/pull/5984) (PcieAuto on by default for gfx103x); drafts [#5474](https://github.com/Niko1221/Strata/pull/5474), [#5475](https://github.com/Niko1221/Strata/pull/5475), [#5476](https://github.com/Niko1221/Strata/pull/5476) (the 11-06 kernel batch), [#5691](https://github.com/Niko1221/Strata/pull/5691) (VRAM calibration), [#5698](https://github.com/Niko1221/Strata/pull/5698) (encoder warm-up), [#5897](https://github.com/Niko1221/Strata/pull/5897) (picture encoder environment), #5146; merged or earlier #4006 (in 0.2.12), #4005, #3073, #3095, #3381, #3382;
   - DP findings on [#5002](https://github.com/Niko1221/Strata/pull/5002).
 
 Experiment numbers (E…) refer to the author's lab notebook (not public).

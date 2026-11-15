@@ -1,0 +1,144 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20261114220437
+Username: IanLAB\<user>
+RunAs User: IanLAB\<user>
+Configuration Name: 
+Machine: IANLAB (Microsoft Windows NT 10.0.26300.0)
+Host Application: powershell.exe -NoProfile -ExecutionPolicy Bypass -Command Start-Transcript C:\strata\e839-install.log -Force; & C:\strata\install-rx6000-new.ps1 -ModelPath C:\strata\models\iq3_s -FastZip C:\strata\bundle\strata-rx6000-fast-0211fz-win-gfx1030.zip; Stop-Transcript
+Process ID: 13892
+PSVersion: 5.1.26100.9818
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.9818
+BuildVersion: 10.0.26100.9818
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Transcript started, output file is C:\strata\e839-install.log
+
+== 1/4  the Strata Terminal
+strata 0.2.3.1 (build 0.1.48.1; python 3.12.15 at C:\Users\<user>\AppData\Local\Strata\terminal\curr
+ent\python\python.exe)
+
+== 2/4  the graphics card and the engine package
+Strata sees: AMD Radeon RX 6900 XT  (gfx1030)
+Engine package: 0.1.59 rdna2 (code for gfx1030, gfx1031)
+Strata update (https://github.com/Niko1221/Strata/releases/latest/download)
+  Reading the signed update feed
+Feed sequence 124, signed by 5d1bc23abbeffd0d
+Engine  0.1.59   up to date
+
+== 3/4  setting up the model and saving the preset 'rx6000-tuned'
+strata launch --model iq3_s --context 64k --vision cpu --tune skip --save-preset rx6000-tuned --yes --no-tui --set vram-reserve-mib=1536 --set kv-resident=32768 --set pcie-frac=0.2 --set prefill=8192 --set STRATA_HIP_PROMPT_F16=1 --set STRATA_PREFILL_COPY_EVENT_EVERY=16 --set STRATA_PREFILL_COPY_WAIT_DEDUPE=1 --set STRATA_PREFILL_CPU_SHARE=auto --set STRATA_PREFILL_CPU_SHARE_BATCH=1 --set STRATA_PREFILL_STREAM_MIN=2048 --set STRATA_HC_PERSIST=1 --set STRATA_PIPED_CONCURRENT=1 --set STRATA_PW_WITH_BATCH=1 --set STRATA_STAGE_TRIM=1 --set STRATA_GDN_HEAD=1 --set STRATA_GDN_PP=2 --set STRATA_GDN_CONVL2=1 --set STRATA_GDN_NOY=1 --set STRATA_DEQUANT_WIDE=1 --set STRATA_IQ_STAGE_TABLES=1 --set STRATA_PLE_COMPACT=1 --set STRATA_PLE_COPY_STREAM=1 --set STRATA_SLOT_COPY_DIRECT=1 --set STRATA_SLOT_COPY_BATCHSYNC=1 --set STRATA_SLOT_CKPT_MOVE=1 --set STRATA_KV_HOST_DMA=1 --set STRATA_ATTN_MERGE_V2=1 --set STRATA_FUSE_HITS=1 --set STRATA_GU_SWIGLU=1 --set STRATA_IO_THREADS=128 --set STRATA_HOST_CORE=sibling --model-path C:\strata\models\iq3_s
+    Checking the engine for this computer…
+  Engine 0.1.59 (hip) is installed.  100%
+  qwen IQ3_S is already installed with these choices.  100%
+    Writing this launch's settings…
+    Settings are saved.
+    Starting the engine and loading the model. The first start can take a few minutes.
+    Loading the model… 1 s
+    Loading the model… 2 s
+    Loading the model… 3 s
+    Loading the model… 4 s
+    Loading the model… 5 s
+    Loading the model… 6 s
+    Loading the model… 7 s
+    Loading the model… 8 s
+    Loading the model… 9 s
+    Loading the model… 10 s
+    Loading the model… 11 s
+    Loading the model… 12 s
+    Loading the model… 13 s
+    Loading the model… 14 s
+    Loading the model… 15 s
+    Loading the model… 16 s
+    Loading the model… 17 s
+    Loading the model… 18 s
+    Loading the model… 19 s
+    Loading the model… 20 s
+    Loading the model… 21 s
+    Loading the model… 22 s
+    Loading the model… 23 s
+    Loading the model… 24 s
+    Loading the model… 25 s
+    Loading the model… 26 s
+    Loading the model… 27 s
+    Loading the model… 28 s
+    Loading the model… 29 s
+    Loading the model… 30 s
+    Loading the model… 31 s
+    Loading the model… 32 s
+    Loading the model… 33 s
+    Loading the model… 34 s
+    Loading the model… 35 s
+    Loading the model… 36 s
+    Loading the model… 37 s
+    Loading the model… 38 s
+    Loading the model… 39 s
+    Loading the model… 40 s
+    Loading the model… 41 s
+    Loading the model… 42 s
+    Loading the model… 43 s
+    Loading the model… 44 s
+    Loading the model… 45 s
+    Loading the model… 46 s
+    Loading the model… 47 s
+    Loading the model… 48 s
+    Loading the model… 49 s
+    Loading the model… 50 s
+    Loading the model… 51 s
+    Loading the model… 52 s
+    Loading the model… 53 s
+    Loading the model… 54 s
+    Loading the model… 55 s
+    Loading the model… 56 s
+    Loading the model… 57 s
+    Loading the model… 58 s
+    Loading the model… 59 s
+    Loading the model… 60 s
+    Loading the model… 61 s
+    Loading the model… 62 s
+    Loading the model… 63 s
+    Loading the model… 64 s
+    Loading the model… 65 s
+    Loading the model… 66 s
+    Loading the model… 67 s
+    Loading the model… 68 s
+    Loading the model… 69 s
+    Loading the model… 70 s
+    Loading the model… 71 s
+    Loading the model… 72 s
+    Loading the model… 73 s
+    Loading the model… 74 s
+    Loading the model… 75 s
+    Loading the model… 76 s
+    Loading the model… 77 s
+    Loading the model… 78 s
+    The model is loaded and answering.
+    Ready: http://127.0.0.1:8080
+    Strata is serving.
+
+Strata is serving.
+  This computer  http://127.0.0.1:8080/v1
+  Anthropic apps http://127.0.0.1:8080   (Claude Code: ANTHROPIC_BASE_URL, no /v1 at the end)
+  Watch it:    strata monitor --url http://127.0.0.1:8080
+  Connect an app:  strata connect opencode      Stop:  strata launch --stop --preset "rx6000-tuned"
+
+== 3b/4 the fast engine (strata-0211fz built for gfx1030)
+Stopped rx6000-tuned.
+[!] Only 53.5 GB of RAM is free. Strata needs ~47 GB for the expert arena: close browsers, chat apps and game launchers,
+    or it reads experts from disk and runs several times slower.
+
+== 4/4  done
+The fast engine is starting in its own window (about a minute). It serves http://127.0.0.1:8080/v1
+Next time start it with:     C:\Users\<user>\AppData\Local\Strata\rx6000-fast\0211fz-win-gfx1030\start-fast.bat
+Stop it: close that window.
+Official engine instead:     strata launch --preset rx6000-tuned
+Before you judge the speed: put your monitor on the CPU's graphics (iGPU) if you have one, keep 55 GB of RAM free,
+and close games, browsers with video and the Radeon overlay (README.md).
+**********************
+Windows PowerShell transcript end
+End time: 20261114220636
+**********************

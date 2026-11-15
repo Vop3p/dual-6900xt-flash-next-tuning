@@ -1,0 +1,68 @@
+{
+ "exe": "C:\\Users\\<user>\\AppData\\Local\\Strata\\components\\engine\\0.1.59-windows-x86_64-hip-rdna2\\strata.exe",
+ "args": [
+  "--pack",
+  "C:\\strata\\data\\packs\\iq3_s",
+  "--native",
+  "C:\\strata\\models\\iq3_s\\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+  "--ple-gguf",
+  "C:\\strata\\models\\iq3_s\\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+  "--expert-profile",
+  "C:\\strata\\e828\\expert-profile.bin",
+  "--expert-cache",
+  "auto",
+  "--prefill",
+  "8192",
+  "--spec",
+  "3",
+  "--spec-min-p",
+  "0.6",
+  "--mtp",
+  "C:\\strata\\data\\mtp\\rt",
+  "--max-context",
+  "65536",
+  "--kv",
+  "int8",
+  "--kv-resident",
+  "32768",
+  "--vram-reserve-mib",
+  "1536",
+  "--pipeline-windows",
+  "2",
+  "--conversation-cache-mib",
+  "0",
+  "--mtp-q4",
+  "head",
+  "--pcie-frac",
+  "0.2"
+ ],
+ "cwd": "C:\\strata\\e828\\src",
+ "tokenizer": "C:\\strata\\data\\packs\\iq3_s\\tokenizer",
+ "model_name": "strata-split-256k",
+ "log": "C:\\strata\\e829\\Lz1\\engine.log",
+ "lib_dirs": [
+  "C:\\Users\\<user>\\AppData\\Local\\Strata\\components\\engine\\0.1.59-windows-x86_64-hip-rdna2"
+ ],
+ "port": 8089,
+ "backend": "hip",
+ "gpu": [
+  0
+ ],
+ "gpus_asked": true,
+ "env": {
+  "STRATA_HIP_PROMPT_F16": "1",
+  "STRATA_HIP_ADAPT_KERNEL_COPY": "1",
+  "STRATA_PREFILL_CPU_SHARE": "auto",
+  "STRATA_HC_PERSIST": "1",
+  "STRATA_PIPED_CONCURRENT": "1",
+  "STRATA_PREFILL_STREAM_MIN": "2048",
+  "STRATA_IO_THREADS": "128",
+  "STRATA_HOST_CORE": "sibling"
+ },
+ "gpu_order": "as_given",
+ "parallel": 1,
+ "sampling": {
+  "temperature": 0,
+  "presence_penalty": 0
+ }
+}

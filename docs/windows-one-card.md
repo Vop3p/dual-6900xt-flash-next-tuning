@@ -11,7 +11,9 @@
 
 A second box (IanLAB: i9-10900K, 64 GB DDR4-3600, one RX 6900 XT 16 GB on PCIe 3.0 x16, Windows 11, the same IQ3_S model, 64K context), 10-23 → 10-24. Since 0.2.2 Strata's update feed carries a Windows engine package for RX 6000 cards (`windows-x86_64-hip-rdna2`), "built but untried" in the release notes; this is it on a real card. **A no-compile setup with the settings below: [`windows-rx6000/`](../windows-rx6000/)** (the official Terminal, the official package, a saved `strata launch` preset).
 
-**Where it ended (standard benchmark, official package, settings only):** prompt 4K / 16K **452 / 479 → 586 / 1,076** tok/s, decode **28 → 42** tok/s, first token on a short prompt 2.8 → 1.1 s, 12/12. With #4005 on top (a local build, E559), 4K / 16K read at 809 / 1,125 and decode at 45.5. Against Linux on the same card model (E540, one card): Windows was 582 / 811 prompt (4K / 32K) and 36.9 decode against Linux 944 / 1,160 and 47.4; after this work 32K reads at 1,163 against Linux 1,165 (8,192 chunk, a local build with the copy-event patch and #3381 / #3073), and decode 43–47.
+**Now (2026-11-14, [below](#2026-11-14-release-0213-engine-0159-and-porting-the-linux-switches)):** the lazy pack installs a local build of the Linux production source and reads 4K / 16K at **779 / 1,333** tok/s, decode 44–46, 12/12; official pieces only: 809 / 1,157.
+
+**Where it ended in October (standard benchmark, official package, settings only):** prompt 4K / 16K **452 / 479 → 586 / 1,076** tok/s, decode **28 → 42** tok/s, first token on a short prompt 2.8 → 1.1 s, 12/12. With #4005 on top (a local build, E559), 4K / 16K read at 809 / 1,125 and decode at 45.5. Against Linux on the same card model (E540, one card): Windows was 582 / 811 prompt (4K / 32K) and 36.9 decode against Linux 944 / 1,160 and 47.4; after this work 32K reads at 1,163 against Linux 1,165 (8,192 chunk, a local build with the copy-event patch and #3381 / #3073), and decode 43–47.
 
 **What was measured, in the order it mattered**
 
@@ -24,6 +26,35 @@ A second box (IanLAB: i9-10900K, 64 GB DDR4-3600, one RX 6900 XT 16 GB on PCIe 3
 - **Pictures.** The package ships the picture reader; the CPU reader read a test image correctly in 4–5 s. The GPU reader in the same package (`strata-vision-hip.exe`) is built for gfx1200 / gfx1201 only: with `gpu: true` it stops with `this GPU (gfx1030) is not in the picture reader's build (gfx1200,gfx1201)` (E554, a hand-written config without a CPU fallback). Built from the official source for gfx1030 / gfx1031 it runs on the card (E555/E556): 4/4 answers correct, big pictures at 1,059 image tokens instead of 300, about 1.3 GB of VRAM that the engine takes from the expert cache (3,479 instead of 4,166 slots; decode at 4K 44.4 vs 44.5 tok/s, one run each). The lazy pack's `-Vision gpu` sets this up ([windows-rx6000](../windows-rx6000/README.md#pictures-on-the-gpu--vision-gpu-optional)).
 - **What did not help:** large pages (64 GB of RAM cannot give 47 GB of contiguous 2 MB pages, error 1450); a rocBLAS table tuned under Linux (refused at run time on Windows; one tuned on Windows helps only prompts under ~1K new tokens, −7.6%); `STRATA_SH_STREAM` (slower decode on Windows, and with KV streaming it stopped the engine, [#3895](https://github.com/Niko1221/Strata/pull/3895)); building the engine locally (same speed as the package, E537).
 
+## 2026-11-14: release 0.2.13 (engine 0.1.59), and porting the Linux switches
+
+Same PC. The official package was updated with `strata update` to engine 0.1.59. Every comparison below is interleaved fresh starts with synthetic 4K / 32K prompts, unless it says standard benchmark. Standard-benchmark runs are in [`bench/results/e837/`](../bench/results/e837/) (also Strata PR [#5997](https://github.com/Niko1221/Strata/pull/5997)), [`e838/`](../bench/results/e838/), [`e839/`](../bench/results/e839/) and [`e840/`](../bench/results/e840/).
+
+- **PcieAuto, ten pairs (E828).** Unset against `STRATA_PCIE_FRAC_DEFAULT=auto`, the package otherwise at its defaults: decode **+15.1% at 4K and +13.3% at 32K, 10 of 10 pairs**, with the share going 0.35 → 0.20 and prompts unchanged. The same test on the Linux box (E824) gave +4.9% / +1.0%. Proposed as the gfx103x default in Strata PR [#5984](https://github.com/Niko1221/Strata/pull/5984).
+- **Linux switches that hurt under Windows.** I started from the Linux production env (the switches the release engine knows) and split it in halves until single switches were left (E829–E832). Four of them are slower here:
+  - `STRATA_SIDE_MIXER=2`: decode **−22%**.
+  - `STRATA_SH_STREAM=1`: **−17 to −19%** (3 of 3). The first-request fault of 0.1.48 did not come back in 4 starts.
+  - `STRATA_HIP_ADAPT_KERNEL_COPY=1`: −2.5% (3 of 3).
+  - `STRATA_FUSE_WAIT=2`: −1% (3 of 3).
+
+  The two big ones each add a branch stream. Every cross-stream dependency is a WDDM submission, which is the E541 cost again. The rest of the set (FP16 prompt, GDN kernels, PLE compaction, hc persistence, prompt CPU share, and others) did not slow decode and made prompts much faster.
+- **The #4005 copy-event switches pay only once prompts are fast (E835, E836, E838).** On the release defaults: 4K −0.5%, 32K +1.2%. With the FP16 prompt switches (a rocBLAS table is not needed, E838): 4K **+36%**, 32K **+9%** (3 of 3), decode unchanged. On the default path the GPU is busy with generic BF16 products, so the per-event cost stays hidden.
+- **`--ple-io ram` does not fit in 64 GB.** It locks the 27 GB PLE table, and then only 22 of the 47 GiB expert arena gets pinned. The rest pages, and prompts fall to ~130–180 tok/s.
+- **A new noise source.** How much of the expert arena Windows lets the engine register for the GPU (`… slices pinned` in the engine log) changes from start to start. 46 is normal. Starts with 0 or 13 read prompts 25–30% slower and decoded ~10% slower. They came right after the previous engine exited. Waiting for free RAM to come back (≥55 GB) before the next start removed it: three starts of one config then read identically.
+
+**Where it ends now.** Standard benchmark, 12/12 sanity:
+
+| | prompt 4K | prompt 16K | decode short / 4K / 16K |
+|---|---|---|---|
+| release 0.2.13 package, the lazy pack's old settings (8 switches) | 616 | 1,078 | 44.6 / 40.4 / 43.6 |
+| release 0.2.13 package, the lazy pack's `-Official` settings (27 official switches, no rocBLAS table) | 809 | 1,157 | 43.6 / 40.4 / 40.4 |
+| a local Windows build of this box's Linux production source (`strata-0211fz`), the switches above minus the four, + #4005 + PcieAuto, a Windows rocBLAS table, `--prefill 8192` | **778** | **1,340** | 47.6 / 43.9 / 43.0 |
+| the same source built for gfx1030 + gfx1031, as the lazy pack now installs it (E840) | 779 | 1,333 | 45.9 / 44.5 / 43.5 |
+
+The local build also read a 128,000-token prompt at 1,110 tok/s and decoded at 41.8 (E833). On synthetic 4K / 32K prompts against the release package at its defaults (prompt 460 / 469, decode 38.0 / 39.0, E828), it reads 4K +71% and 32K 2.9×, and decodes +20% / +29% (E834).
+
+**The lazy pack now installs the local build** (user decision: the point of the pack is the fastest measured configuration, ready to run). [`windows-rx6000/`](../windows-rx6000/) downloads it from this repository's releases, checked against a SHA-256, and keeps the official package as `-Official`. The build is for gfx1030 and gfx1031; the gfx1031 code has never run on a card.
+
 **Mistakes on this line (kept so they are not repeated)**
 
 - Read `STRATA_PREFILL_TIMING` as the truth for a day: its own per-expert event records cost 8% of a 32K read on Windows and charged ~3.3 s of copy waits to "dequant". The fix is [#4006](https://github.com/Niko1221/Strata/pull/4006); before it, "dequant is 3× slower on Windows" was a measurement artifact.
@@ -31,3 +62,5 @@ A second box (IanLAB: i9-10900K, 64 GB DDR4-3600, one RX 6900 XT 16 GB on PCIe 3
 - Explained the decode gap with the expert-slot count (E535–E537), then with WDDM latency missing from the share formula (E541); the measured answer was that the start-up share ignores how fast the CPU is (E545).
 - Three arms of one A/B were taken while a video played on the PC (decode −33%); now the runs start after checking that nobody is using the machine.
 - Configured the GPU picture reader without `gpu: true`, saw it run on the CPU and blamed the 16 GB of VRAM; the reader only uses the GPU when told to, and when told to it showed the real limit: it is not built for gfx1030.
+- 11-14: wrote that the #4005 copy-event switches needed the rocBLAS table, because they only paid on the arm that had one. That arm also had the FP16 prompt switches; the official-only run (E838) showed FP16 was the condition. Two things changed between the arms, so the arm did not say which one mattered.
+- 11-14: a run script took the config name by stripping trailing digits from the arm name, so "Lz21" ran the "Lz" config again. Its numbers matched the old config within 1%, which is what gave it away; the new config was rerun under a name without digits.

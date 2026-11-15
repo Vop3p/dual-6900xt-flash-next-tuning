@@ -1,16 +1,23 @@
 <#
 .SYNOPSIS
-  Strata on an RX 6800 / 6800 XT / 6900 XT / 6950 XT (gfx1030) or RX 6700 XT (gfx1031) under Windows, without compiling:
-  the official Terminal and the official signed "rdna2" engine package, with settings measured on an RX 6900 XT.
+  Strata on an RX 6800 / 6800 XT / 6900 XT / 6950 XT (gfx1030) or RX 6700 XT (gfx1031) under Windows, without compiling,
+  in the fastest configuration measured on an RX 6900 XT: an engine built for gfx1030 / gfx1031 from this repository's patched source,
+  run by the official Terminal's Python. -Official keeps to the official signed "rdna2" engine package instead.
 
 .DESCRIPTION
   1. Installs the Strata Terminal with the official one-line installer (skipped when `strata` is already installed).
   2. Checks that Strata sees an RX 6000 card, and pins the engine choice to the official "rdna2" package
      (STRATA_ENGINE_BACKEND=hip-rdna2), so a PC with a second AMD GPU (an APU's Radeon 760M / 780M) cannot end up with
      another family's package.
-  3. Sets up the model with `strata launch` and saves a preset with the tuned settings below, then starts it.
+  3. Sets up the model with `strata launch` and saves a preset with the tuned settings below (the official engine; this
+     preset stays as the fallback).
+  4. Unless -Official: downloads the fast engine bundle from this repository's releases (checked against its SHA-256), writes
+     a run config from the preset's (same model, pack and drafter files) with the fast engine and its settings, and starts it
+     with start-fast.bat. The bundle is the Strata source at strata-0211fz (MIT, patches in patches/strata/) built for gfx1030 and
+     gfx1031 (the gfx1031 code was never run on a card), with the ROCm runtime that build uses, and a rocBLAS table tuned on Windows for that runtime.
 
-  Nothing here is built or downloaded from anywhere but the official Strata release and update feed.
+  Strata needs about 47 GB of free RAM for the expert arena on top of what Windows and your programs use: on a 64 GB PC,
+  close browsers, chat apps and game launchers first. The script warns when less than 55 GB is free.
 
 .PARAMETER ModelPath
   A folder with model files you already have (the two .gguf shards of Qwen3.8-Flash-Next). Without it, `strata launch`
@@ -36,6 +43,12 @@
 .PARAMETER Preset
   The name of the saved preset (default rx6000-tuned). Start it again later with: strata launch --preset rx6000-tuned
 
+.PARAMETER Official
+  Only the official engine package and the preset (the old behaviour of this script); nothing is downloaded from this repository.
+
+.PARAMETER FastZip
+  A local copy of the fast engine bundle instead of the download (same SHA-256 check).
+
 .PARAMETER Stock
   Save the preset with Strata's default settings instead of the tuned ones (for a before/after comparison).
 
@@ -49,7 +62,9 @@ param(
     [ValidateSet("on", "gpu", "off")][string]$Vision = "on",
     [string]$Preset = "rx6000-tuned",
     [switch]$Stock,
-    [string]$GpuVisionZip = ""
+    [string]$GpuVisionZip = "",
+    [switch]$Official,
+    [string]$FastZip = ""
 )
 $ErrorActionPreference = "Stop"
 
@@ -59,8 +74,33 @@ $GpuVisionUrl    = "https://github.com/Vop3p/dual-6900xt-flash-next-tuning/relea
 $GpuVisionSha256 = "d933a55c35c2e12ab1a1cf0c738da3cfc0c79bb95b1e5811a34ab64d3aad8c77"
 $GpuVisionRocm   = "10.2.0a20260930"
 
+# The fast engine bundle (default; -Official skips it): engine\ (strata.exe of strata-0211fz built for gfx1030 + gfx1031 with the ROCm runtime
+# of that build), src\ (the server of the same source), rocblas\ (a gfx1030 table tuned on Windows for that rocBLAS), LICENSE, BUILD.txt.
+$FastVersion = "0211fz-win-gfx103x"
+$FastUrl     = "https://github.com/Vop3p/dual-6900xt-flash-next-tuning/releases/download/rx6000-fast-$FastVersion/strata-rx6000-fast-$FastVersion.zip"
+$FastSha256  = "27ffeb429ec7281df3111bf52e8e1d7b8cbb526b42b6f7102238aa34b901079c"
+# Measured on one RX 6900 XT (E828-E836, 2026-11-14): the Linux production switches minus four that are slower under Windows
+# (STRATA_SIDE_MIXER -22%, STRATA_SH_STREAM -18%, STRATA_HIP_ADAPT_KERNEL_COPY -2.5%, STRATA_FUSE_WAIT -1%), plus #4005's copy-event switches.
+$FastEnv = [ordered]@{
+    STRATA_PCIE_FRAC_DEFAULT = "auto";  STRATA_PREFILL_COPY_EVENT_EVERY = "16"; STRATA_PREFILL_COPY_WAIT_DEDUPE = "1"
+    STRATA_HIP_PROMPT_F16 = "1";        STRATA_PROMPT_ATTN_RDNA2 = "1";       STRATA_F16_NOWIDEN = "1";       STRATA_SWIGLU_Q8 = "1"
+    STRATA_PREFILL_CPU_SHARE = "auto";  STRATA_PREFILL_CPU_SHARE_BATCH = "1"; STRATA_PREFILL_STREAM_MIN = "2048"; STRATA_IO_THREADS = "128"
+    STRATA_HC_PERSIST = "1";            STRATA_HC_PERSIST_Q8 = "2";           STRATA_HC_I8ONLY = "1";         STRATA_HCP_Q81 = "1"
+    STRATA_PW_WITH_BATCH = "1";         STRATA_PIPED_CONCURRENT = "1";        STRATA_STAGE_TRIM = "1"
+    STRATA_GDN_HEAD = "1"; STRATA_GDN_PP = "2"; STRATA_GDN_CONVL2 = "1"; STRATA_GDN_NOY = "1"; STRATA_GDN_Q81 = "1"
+    STRATA_DEQUANT_WIDE = "1";          STRATA_IQ_STAGE_TABLES = "1";         STRATA_PLE_COMPACT = "1";       STRATA_PLE_COPY_STREAM = "1"
+    STRATA_SLOT_COPY_DIRECT = "1";      STRATA_SLOT_COPY_BATCHSYNC = "1";     STRATA_SLOT_CKPT_MOVE = "1";    STRATA_SLOT_LAZY = "1"
+    STRATA_KV_HOST_DMA = "1";           STRATA_ATTN_MERGE_V2 = "1";           STRATA_FUSE_HITS = "1";         STRATA_GU_SWIGLU = "1"
+    STRATA_MMVQ_NW1 = "1";              STRATA_EXP_TABLE = "1";               STRATA_ROUTE_BELL = "1";        STRATA_FETCH_REBASE = "1"
+}
+$FastArgs = [ordered]@{
+    "--prefill" = "8192"; "--vram-reserve-mib" = "1536"; "--vram-reserve-later-mib" = "564"; "--kv" = "int8"; "--kv-resident" = "32768"
+    "--spec" = "3"; "--spec-min-p" = "0.6"; "--pipeline-windows" = "2"; "--mtp-q4" = "head"; "--conversation-cache-mib" = "0"
+}
+
 function Step($text) { Write-Host ""; Write-Host "== $text" -ForegroundColor Cyan }
 function Fail($text) { Write-Host "[X] $text" -ForegroundColor Red; exit 1 }
+function FreeRamGB { [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 1) }
 
 # --- 1. the Terminal ------------------------------------------------------------------------------------------------
 Step "1/4  the Strata Terminal"
@@ -106,15 +146,24 @@ $tuned = @(
     "kv-resident=32768",                     # half the 64K KV in VRAM, the rest in pinned RAM: more expert-cache slots, no measured cost
     "pcie-frac=0.2",                         # decode +29%: the start-up share (0.35 here) makes the GPU wait for its PCIe experts
     "prefill=8192",                          # 32K prompts +17%: auto stops at 6,144 on Windows (#1630); 8,192 ran clean here up to 262K context
-    "STRATA_HIP_PROMPT_F16=1",               # the documented opt-in prompt switches (docs/AMD_HIP.md), measured together
-    "STRATA_HIP_ADAPT_KERNEL_COPY=1",
+    "STRATA_HIP_PROMPT_F16=1",               # FP16 prompt GEMMs (docs/AMD_HIP.md); the copy-event switches below only pay with it on
+    "STRATA_PREFILL_COPY_EVENT_EVERY=16",    # #4005: one copied event per 16 experts, one wait per release: prompt 4K 616 -> 809 together
+    "STRATA_PREFILL_COPY_WAIT_DEDUPE=1",     #   with the switches below (E838, standard benchmark, engine 0.1.59)
     "STRATA_PREFILL_CPU_SHARE=auto",         # short prompts: first token 2.8 s -> 1.1 s
+    "STRATA_PREFILL_CPU_SHARE_BATCH=1",
+    "STRATA_PREFILL_STREAM_MIN=2048",
     "STRATA_HC_PERSIST=1",
     "STRATA_PIPED_CONCURRENT=1",
-    "STRATA_PREFILL_STREAM_MIN=2048",
+    "STRATA_PW_WITH_BATCH=1",
+    "STRATA_STAGE_TRIM=1",
+    "STRATA_GDN_HEAD=1", "STRATA_GDN_PP=2", "STRATA_GDN_CONVL2=1", "STRATA_GDN_NOY=1",
+    "STRATA_DEQUANT_WIDE=1", "STRATA_IQ_STAGE_TABLES=1", "STRATA_PLE_COMPACT=1", "STRATA_PLE_COPY_STREAM=1",
+    "STRATA_SLOT_COPY_DIRECT=1", "STRATA_SLOT_COPY_BATCHSYNC=1", "STRATA_SLOT_CKPT_MOVE=1", "STRATA_KV_HOST_DMA=1",
+    "STRATA_ATTN_MERGE_V2=1", "STRATA_FUSE_HITS=1", "STRATA_GU_SWIGLU=1",
     "STRATA_IO_THREADS=128",
     "STRATA_HOST_CORE=sibling"               # the host thread on core 0's second logical processor, not on the one Windows sends GPU interrupts to: prompt 4K +4%
-    # STRATA_SH_STREAM is left out on purpose: on Windows it slows decode and, with KV streaming, stopped the engine (#3895)
+    # Left out on purpose, each measured slower under Windows (E829-E832): STRATA_SIDE_MIXER (-22% decode), STRATA_SH_STREAM (-18%, #3895),
+    # STRATA_HIP_ADAPT_KERNEL_COPY (-2.5%), STRATA_FUSE_WAIT (-1%).
 )
 $setArgs = @()
 if (-not $Stock) { foreach ($s in $tuned) { $setArgs += @("--set", $s) } }
@@ -178,6 +227,78 @@ if ($Vision -eq "gpu") {
     Write-Host "Check that the GPU reader runs: the engine log says 'strata-vision: warmed up at ... image tokens'."
     Write-Host "Before you judge the speed: put your monitor on the CPU's graphics (iGPU) if you have one, and close games,"
     Write-Host "browsers with video and the Radeon overlay. They share the card's memory with the model (README.md)."
+    exit 0
+}
+
+if (-not $Official -and -not $Stock) {
+    # --- 3b. the fast engine -------------------------------------------------------------------------------------------
+    Step "3b/4 the fast engine (strata-0211fz built for gfx1030 / gfx1031)"
+    & $strata launch --stop --preset $Preset | Out-Host
+    $runCfg = Join-Path $env:LOCALAPPDATA "Strata\launch\$Preset.json"
+    if (-not (Test-Path $runCfg)) { Fail "the run config of '$Preset' is not at $runCfg" }
+    $py = Join-Path $env:LOCALAPPDATA "Strata\terminal\current\python\python.exe"
+    if (-not (Test-Path $py)) { Fail "the Terminal's Python is not at $py. The preset '$Preset' (official engine) is saved and works." }
+    $zip = $FastZip
+    if (-not $zip) {
+        $zip = Join-Path $env:TEMP "strata-rx6000-fast-$FastVersion.zip"
+        Write-Host "Downloading $FastUrl (~150 MB)"
+        Invoke-WebRequest $FastUrl -OutFile $zip -UseBasicParsing
+    }
+    $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+    if ($hash -ne $FastSha256) { Fail "the fast engine bundle has SHA-256 $hash, expected ${FastSha256}: not used. The preset '$Preset' (official engine) is saved and works." }
+    $fdir = Join-Path $env:LOCALAPPDATA "Strata\rx6000-fast\$FastVersion"
+    if (Test-Path $fdir) { Remove-Item -Recurse -Force $fdir }
+    New-Item -ItemType Directory -Force $fdir | Out-Null
+    Expand-Archive -Force $zip $fdir
+    $exe = Join-Path $fdir "engine\strata.exe"
+    if (-not (Test-Path $exe)) { Fail "engine\strata.exe is not in $zip" }
+
+    # The preset's run config gives the model, pack, drafter and expert-profile paths; only the engine and the settings change.
+    $cfg = Get-Content $runCfg -Raw | ConvertFrom-Json
+    $a = [System.Collections.ArrayList]@($cfg.args)
+    $i = $a.IndexOf("--pcie-frac"); if ($i -ge 0) { $a.RemoveRange($i, 2) }           # PcieAuto refines the share instead
+    foreach ($k in $FastArgs.Keys) {
+        $i = $a.IndexOf($k)
+        if ($i -ge 0) { $a[$i + 1] = $FastArgs[$k] } else { [void]$a.Add($k); [void]$a.Add($FastArgs[$k]) }
+    }
+    $cfg.args = @($a)
+    $cfg.exe = $exe
+    $cfg | Add-Member -Force lib_dirs @((Join-Path $fdir "engine"))
+    $cfg | Add-Member -Force cwd (Join-Path $fdir "src")
+    $cfg | Add-Member -Force log (Join-Path $fdir "engine.log")
+    $env2 = [ordered]@{}
+    if ($cfg.env) { foreach ($p in $cfg.env.PSObject.Properties) { $env2[$p.Name] = $p.Value } }
+    foreach ($k in "STRATA_SIDE_MIXER", "STRATA_SH_STREAM", "STRATA_HIP_ADAPT_KERNEL_COPY", "STRATA_FUSE_WAIT", "STRATA_HOST_CORE") { $env2.Remove($k) }
+    foreach ($k in $FastEnv.Keys) { $env2[$k] = $FastEnv[$k] }
+    $env2["STRATA_ROCBLAS_TUNING"] = (Join-Path $fdir "rocblas")
+    $cfg | Add-Member -Force env ([pscustomobject]$env2)
+    $fastCfg = Join-Path $fdir "fast-run.json"
+    $cfg | ConvertTo-Json -Depth 32 | Set-Content -Encoding UTF8 $fastCfg
+    $port = if ($cfg.port) { $cfg.port } else { 8089 }
+
+    $bat = Join-Path $fdir "start-fast.bat"
+    @(
+        "@echo off",
+        "rem Strata on an RX 6000 card, fast engine (strata-0211fz for gfx1030 / gfx1031). Serves http://127.0.0.1:$port/v1 . Stop: close this window.",
+        "tasklist | findstr /i ""strata.exe"" >nul && (echo A Strata engine is already running - stop it first ^(strata launch --stop --preset $Preset^). & pause & exit /b 1)",
+        "for /f %%m in ('powershell -NoProfile -Command ""[int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB)""') do if %%m LSS 55 echo WARNING: only %%m GB of RAM free; the expert arena needs ~47 GB. Close browsers, chat apps and game launchers or Strata will read experts from disk and run several times slower.",
+        "cd /d ""$fdir\src""",
+        """$py"" serve\server.py --engine strata --config ""$fastCfg"" --port $port"
+    ) | Set-Content -Encoding ASCII $bat
+
+    $free = FreeRamGB
+    if ($free -lt 55) {
+        Write-Host "[!] Only $free GB of RAM is free. Strata needs ~47 GB for the expert arena: close browsers, chat apps and game launchers," -ForegroundColor Yellow
+        Write-Host "    or it reads experts from disk and runs several times slower." -ForegroundColor Yellow
+    }
+    Start-Process -FilePath $bat
+    Step "4/4  done"
+    Write-Host "The fast engine is starting in its own window (about a minute). It serves http://127.0.0.1:$port/v1"
+    Write-Host "Next time start it with:     $bat"
+    Write-Host "Stop it: close that window."
+    Write-Host "Official engine instead:     strata launch --preset $Preset"
+    Write-Host "Before you judge the speed: put your monitor on the CPU's graphics (iGPU) if you have one, keep 55 GB of RAM free,"
+    Write-Host "and close games, browsers with video and the Radeon overlay (README.md)."
     exit 0
 }
 
